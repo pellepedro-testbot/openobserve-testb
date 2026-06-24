@@ -1,20 +1,19 @@
-# docker-compose.yml — builds the OpenObserve SUT from source for testbot.
-# OpenObserve facts (verified 2026-06-23):
-#   Dockerfile:  deploy/build/Dockerfile  (multi-stage: web build + cargo --release)
-#   Context:     repo root (Dockerfile does `COPY . /openobserve` + `COPY ./web`)
-#   Port:        5080 (ZO_HTTP_PORT default; binary serves API + embedded web UI)
-#   Health:      GET /healthz  -> 200 {"status":"ok"}  (no auth)
-#   Default org: "default"  (routes are /api/{org_id}/...)
-#   Root creds:  ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD (HTTP Basic on /api)
-#   OpenAPI:     /api-doc/openapi.json  (needs ZO_SWAGGER_ENABLED=true)
+# docker-compose.yml — OpenObserve SUT for testbot eval.
 #
-# NOTE: the from-source build is heavy (large Rust workspace release build + an
-# 8GB-memory Vue build). This is the known runtime risk for the baseline.
+# The "image: openobserve-testb:eval" tag is the stable reference used by both
+# startup paths in setup.sh:
+#   CI:    setup.sh pulls openobserve/openobserve:v0.91.0 and tags it openobserve-testb:eval
+#   Local: docker compose --build produces the image and tags it openobserve-testb:eval
 #
-# UPSTREAM_CHECKOUT: path to the cloned OpenObserve source tree.
-# Defaults to ../  (one level up from deployment-testbot/, i.e. the repo root).
+# OpenObserve facts:
+#   Dockerfile:  deploy/build/Dockerfile  (web build + cargo --release; needs >16 GB)
+#   Port:        5080 (ZO_HTTP_PORT; serves API + embedded web UI)
+#   Health:      GET /healthz -> 200  (no auth)
+#   Default org: "default"
+#   OpenAPI:     /api-doc/openapi.json (ZO_SWAGGER_ENABLED=true)
 services:
   openobserve:
+    image: openobserve-testb:eval
     build:
       context: ${UPSTREAM_CHECKOUT:-../}
       dockerfile: deploy/build/Dockerfile
@@ -30,3 +29,4 @@ services:
       - ZO_DATA_DIR=/data/
       - ZO_SWAGGER_ENABLED=true
       - RUST_LOG=info
+
