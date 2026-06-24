@@ -1,0 +1,24 @@
+# docker-compose.yml.tmpl — rendered into the cloned repo's deployment-testbot/
+# Mealie facts (verified 2026-06-13):
+#   Dockerfile:  docker/Dockerfile  (build target: production, context: ../)
+#   Port:        9000 (APP_PORT default; mapped 9000→9000 for testbot)
+#   Health:      GET /api/app/about
+#   Default creds: changeme@example.com / MyPassword (settings.py defaults)
+#
+# UPSTREAM_CHECKOUT: path to the cloned Mealie source tree.
+# Defaults to ../  (one level up from deployment-testbot/, i.e. the repo root).
+services:
+  mealie:
+    build:
+      context: ${UPSTREAM_CHECKOUT:-../}
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: mealie-testb
+    ports:
+      - "9000:9000"
+    environment:
+      - BASE_URL=http://localhost:9000
+      - ALLOW_SIGNUP=false
+      - DEFAULT_EMAIL=changeme@example.com
+      - DEFAULT_PASSWORD=MyPassword
+      - DB_ENGINE=sqlite
