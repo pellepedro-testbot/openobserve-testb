@@ -64,6 +64,12 @@ export default {
         localStorage.setItem(THEME_MIGRATION_KEY, '1');
       }
       initializeThemeColors();
+      // Expose resolved theme as a data-theme attribute on <html> so Playwright
+      // tests (and other DOM observers) have a stable, assertable signal.
+      document.documentElement.setAttribute(
+        "data-theme",
+        store.state.theme === "dark" ? "dark" : "light"
+      );
     });
 
     // Watch for theme mode changes (light ↔ dark toggle)
@@ -76,8 +82,13 @@ export default {
     // Skipping it would leave stale CSS variables and body classes from the preview.
     watch(
       () => store.state.theme,
-      () => {
+      (newTheme) => {
         initializeThemeColors();
+        // Keep data-theme in sync whenever the user toggles the mode.
+        document.documentElement.setAttribute(
+          "data-theme",
+          newTheme === "dark" ? "dark" : "light"
+        );
       }
     );
 
