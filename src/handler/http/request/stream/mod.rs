@@ -194,6 +194,53 @@ pub async fn create(
     }
 }
 
+/// StreamStatsSummary
+#[utoipa::path(
+    get,
+    path = "/{org_id}/streams/_stats_summary",
+    context_path = "/api",
+    tag = "Streams",
+    operation_id = "StreamStatsSummary",
+    summary = "Get stream statistics summary",
+    description = "Returns an aggregate summary of the organization's streams: the total count and a per-type breakdown (logs, metrics, traces). Read-only.",
+    security(
+        ("Authorization"= [])
+    ),
+    params(
+        ("org_id" = String, Path, description = "Organization name"),
+    ),
+    responses(
+        (status = 200, description = "Success", content_type = "application/json", body = Object),
+    ),
+    extensions(
+        ("x-o2-ratelimit" = json!({"module": "Streams", "operation": "get"})),
+        ("x-o2-mcp" = json!({"description": "Summarize streams by type", "category": "streams"}))
+    )
+)]
+pub async fn stats_summary(
+    Path(org_id): Path<String>,
+    Headers(_user_email): Headers<UserEmail>,
+) -> Response {
+    let streams = stream::get_streams(org_id.as_str(), None, false, None).await;
+    let total = streams.len();
+    let mut logs = 0usize;
+    let mut metrics = 0usize;
+    let mut traces = 0usize;
+    for s in &streams {
+        match s.stream_type {
+            StreamType::Logs => logs += 1,
+            StreamType::Metrics => metrics += 1,
+            StreamType::Traces => traces += 1,
+            _ => {}
+        }
+    }
+    let body = serde_json::json!({
+        "total": total,
+        "by_type": { "logs": logs, "metrics": metrics, "traces": traces },
+    });
+    (StatusCode::OK, Json(body)).into_response()
+}
+
 /// UpdateStreamSettings
 
 #[utoipa::path(
