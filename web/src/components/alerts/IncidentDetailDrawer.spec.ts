@@ -1,0 +1,1464 @@
+// Copyright 2026 OpenObserve Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+// Mock config to enable enterprise routes - must be first before any imports
+vi.mock("@/aws-exports", () => ({
+  default: {
+    isEnterprise: "true",
+    isCloud: "false",
+  },
+}));
+
+// Mock toast so tests don't need $q
+const mockToast = vi.fn();
+vi.mock("@/lib/feedback/Toast/useToast", () => ({
+  toast: (...args: any[]) => mockToast(...args),
+}));
+
+// Mock incidents service
+vi.mock("@/services/incidents", () => ({
+  default: {
+    get: vi.fn(),
+    updateStatus: vi.fn(),
+    triggerRca: vi.fn(),
+    getCorrelatedStreams: vi.fn(),
+    getEvents: vi.fn(),
+    updateIncident: vi.fn(),
+  },
+}));
+
+// Mock service streams API
+vi.mock("@/services/service_streams", () => ({
+  default: {
+    getSemanticGroups: vi.fn(),
+  },
+  buildChipDimensionsFromFilters: vi.fn(() => ({})),
+}));
+
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { mount, flushPromises, VueWrapper } from "@vue/test-utils";
+import IncidentDetailDrawer from "./IncidentDetailDrawer.vue";
+import incidentsService, { Incident, IncidentWithAlerts, IncidentAlert } from "@/services/incidents";
+import serviceStreamsApi, { buildChipDimensionsFromFilters } from "@/services/service_streams";
+import { nextTick } from "vue";
+import i18n from "@/locales";
+import store from "@/test/unit/helpers/store";
+import router from "@/test/unit/helpers/router";
+
+// Install Quasar globally
+
+// Test data factory
+const createIncident = (overrides: Partial<Incident> = {}): Incident => ({
+  id: overrides.id || "incident-1",
+  org_id: overrides.org_id || "org-1",
+  key_type: overrides.key_type || "key-1",
+  status: overrides.status || "open",
+  severity: overrides.severity || "P1",
+  title: overrides.title || "Test Incident",
+  group_values: overrides.group_values || { service: "test-service" },
+  alert_count: overrides.alert_count !== undefined ? overrides.alert_count : 5,
+  first_alert_at: overrides.first_alert_at || 1700000000000000,
+  last_alert_at: overrides.last_alert_at || 1700000000000000,
+  resolved_at: overrides.resolved_at,
+  created_at: overrides.created_at || 1700000000000000,
+  updated_at: overrides.updated_at || 1700000000000000,
+  topology_context: overrides.topology_context,
+});
+
+const createIncidentWithAlerts = (overrides: Partial<IncidentWithAlerts> = {}): IncidentWithAlerts => ({
+  ...createIncident(overrides),
+  alerts: overrides.alerts || [],
+  triggers: overrides.triggers || [],
+});
+
+const createAlert = (overrides: Partial<IncidentAlert> = {}): IncidentAlert => ({
+  incident_id: overrides.incident_id || "incident-1",
+  alert_id: overrides.alert_id || "alert-1",
+  alert_name: overrides.alert_name || "Test Alert",
+  alert_fired_at: overrides.alert_fired_at || 1700000000000000,
+  correlation_reason: overrides.correlation_reason || "service_discovery",
+  created_at: overrides.created_at || 1700000000000000,
+});
+
+describe("IncidentDetailDrawer.vue", () => {
+  let wrapper: VueWrapper<any>;
+
+  const createWrapper = async (props = {}, storeOverrides = {}, incidentId?: string | null) => {
+    // Update store state with overrides
+    if (storeOverrides && Object.keys(storeOverrides).length > 0) {
+      Object.assign(store.state, storeOverrides);
+    }
+
+    // Set incident ID in router params if provided (changed from query to params)
+    if (incidentId) {
+      // Set route params directly to avoid async router.push hanging
+      router.currentRoute.value = {
+        ...router.currentRoute.value,
+        params: { id: incidentId },
+        name: "incidentDetail",
+      } as any;
+    }
+
+    return mount(IncidentDetailDrawer, {
+      props: {
+        ...props,
+      },
+      global: {
+        plugins: [i18n, store, router],
+        stubs: {
+          IncidentServiceGraph: true,
+          SREChat: true,
+          // Use custom stubs that accept props so we can test them
+          TelemetryCorrelationDashboard: {
+            name: 'TelemetryCorrelationDashboard',
+            template: '<div class="telemetry-stub"></div>',
+            props: ['mode', 'externalActiveTab', 'serviceName', 'matchedDimensions', 'additionalDimensions', 'matchedSetId', 'chipDimensions', 'logStreams', 'metricStreams', 'traceStreams', 'timeRange', 'hideDimensionFilters']
+          },
+          CorrelatedLogsTable: {
+            name: 'CorrelatedLogsTable',
+            template: '<div class="logs-stub"></div>',
+            props: ['serviceName', 'sourceStream', 'sourceType', 'hideViewRelatedButton', 'hideDimensionFilters', 'matchedDimensions', 'availableDimensions', 'additionalDimensions', 'logStreams', 'ftsFields', 'timeRange', 'hideSearchTermActions'],
+            emits: ['sendToAiChat']
+          },
+        },
+      },
+    });
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+
+    // Reset store state
+    store.state.selectedOrganization = {
+      label: "default Organization",
+      id: 159,
+      identifier: "default",
+      user_email: "example@gmail.com",
+      subscription_type: "",
+    };
+    store.state.theme = "light";
+
+    // Default mock implementation
+    (incidentsService.get as any).mockResolvedValue({
+      data: createIncidentWithAlerts({
+        id: "1",
+        status: "open",
+        severity: "P1",
+        triggers: [
+          createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+          createAlert({ alert_id: "alert-2", alert_name: "Memory Alert" }),
+        ],
+      }),
+    });
+
+    (incidentsService.updateStatus as any).mockResolvedValue({
+      data: { status: "acknowledged" },
+    });
+
+    (incidentsService.triggerRca as any).mockResolvedValue({
+      data: { rca_content: "## Root Cause Analysis\n\nThe issue is related to high CPU usage." },
+    });
+
+    (incidentsService.getEvents as any).mockResolvedValue({
+      data: { events: [] },
+    });
+
+    (incidentsService.updateIncident as any).mockResolvedValue({
+      data: { severity: "P2" },
+    });
+
+    // Mock service streams API
+    (serviceStreamsApi.getSemanticGroups as any).mockResolvedValue({
+      data: [],
+    });
+  });
+
+  afterEach(() => {
+    if (wrapper) {
+      wrapper.unmount();
+    }
+  });
+
+  describe("Component Initialization", () => {
+    it("should mount component successfully", async () => {
+      wrapper = await createWrapper();
+      expect(wrapper.exists()).toBe(true);
+    });
+
+    it("should show loading state initially", async () => {
+      wrapper = await createWrapper();
+      expect(wrapper.vm.loading).toBe(false);
+    });
+
+    it("should initialize with no incident details", async () => {
+      wrapper = await createWrapper();
+      expect(wrapper.vm.incidentDetails).toBeNull();
+    });
+
+    it("should initialize empty triggers array", async () => {
+      wrapper = await createWrapper();
+      expect(wrapper.vm.triggers).toEqual([]);
+    });
+
+    it("should not be updating initially", async () => {
+      wrapper = await createWrapper();
+      expect(wrapper.vm.updating).toBe(false);
+    });
+  });
+
+  describe("URL-based Incident Loading", () => {
+    it("should emit close when drawer closes", async () => {
+      wrapper = await createWrapper();
+      const pushSpy = vi.spyOn(router, 'push');
+
+      wrapper.vm.close();
+      await nextTick();
+
+      // Should navigate back to incident list instead of emitting
+      expect(pushSpy).toHaveBeenCalledWith({ name: "incidentList", query: { org_identifier: "default" } });
+    });
+
+    it("should load details when incident_id is in URL", async () => {
+      wrapper = await createWrapper({}, {}, "test-123");
+      await flushPromises();
+
+      expect(incidentsService.get).toHaveBeenCalledWith("default", "test-123");
+    });
+  });
+
+  describe("Incident Details Loading", () => {
+    it("should load incident details successfully", async () => {
+      const mockIncident = createIncidentWithAlerts({
+        id: "test-123",
+        title: "Test Incident",
+        status: "open",
+        severity: "P1",
+      });
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: mockIncident,
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.incidentDetails).toBeTruthy();
+      expect(wrapper.vm.incidentDetails.id).toBe("test-123");
+      expect(wrapper.vm.incidentDetails.title).toBe("Test Incident");
+    });
+
+    it("should set loading state during fetch", async () => {
+      // Create a pending promise that we can control
+      let resolvePromise: (value: any) => void;
+      const pendingPromise = new Promise((resolve) => {
+        resolvePromise = resolve;
+      });
+
+      (incidentsService.get as any).mockReturnValue(pendingPromise);
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+
+      // Now loading should be true since the promise is pending
+      expect(wrapper.vm.loading).toBe(true);
+
+      // Resolve the promise
+      resolvePromise!({ data: createIncidentWithAlerts({ id: "test-123" }) });
+      await flushPromises();
+      await nextTick(); // Give Vue time to update reactive state
+
+      // Now loading should be false
+      expect(incidentsService.get).toHaveBeenCalled();
+      expect(wrapper.vm.loading).toBe(false);
+    });
+
+    it("should load triggers from incident", async () => {
+      const triggers = [
+        createAlert({ alert_id: "alert-1", alert_name: "CPU Alert" }),
+        createAlert({ alert_id: "alert-2", alert_name: "Memory Alert" }),
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.triggers).toHaveLength(2);
+      expect(wrapper.vm.triggers[0].alert_name).toBe("CPU Alert");
+    });
+
+    it("should handle API error during load", async () => {
+      (incidentsService.get as any).mockRejectedValue(new Error("API Error"));
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      // The error is handled internally, incident details remain null
+      expect(wrapper.vm.incidentDetails).toBeNull();
+    });
+
+    it("should stop loading on error", async () => {
+      (incidentsService.get as any).mockRejectedValue(new Error("API Error"));
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.loading).toBe(false);
+    });
+  });
+
+  describe("Status Update Actions", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper({}, {}, "1");
+
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("should acknowledge incident", async () => {
+      await wrapper.vm.acknowledgeIncident();
+
+      expect(incidentsService.updateStatus).toHaveBeenCalledWith(
+        "default",
+        "1",
+        "acknowledged"
+      );
+    });
+
+    it("should resolve incident", async () => {
+      await wrapper.vm.resolveIncident();
+
+      expect(incidentsService.updateStatus).toHaveBeenCalledWith(
+        "default",
+        "1",
+        "resolved"
+      );
+    });
+
+    it("should reopen incident", async () => {
+      // Change status to resolved first
+      wrapper.vm.incidentDetails.status = "resolved";
+
+      await wrapper.vm.reopenIncident();
+
+      expect(incidentsService.updateStatus).toHaveBeenCalledWith(
+        "default",
+        "1",
+        "open"
+      );
+    });
+
+    it("should set updating state during status update", async () => {
+      const updatePromise = wrapper.vm.acknowledgeIncident();
+
+      expect(wrapper.vm.updating).toBe(true);
+
+      await updatePromise;
+
+      expect(wrapper.vm.updating).toBe(false);
+    });
+
+    it("should show success notification on status update", async () => {
+      mockToast.mockClear();
+
+      await wrapper.vm.acknowledgeIncident();
+
+      expect(mockToast).toHaveBeenCalled();
+      const call = mockToast.mock.calls[0][0];
+      expect(call.variant).toBe("success");
+    });
+
+    it("should not emit status-updated event (removed)", async () => {
+      // This test is no longer relevant as the component doesn't emit events
+      // The component now handles its own state updates
+      await wrapper.vm.acknowledgeIncident();
+
+      // Just verify the API was called
+      expect(incidentsService.updateStatus).toHaveBeenCalled();
+    });
+
+    it("should handle status update error", async () => {
+      mockToast.mockClear();
+      (incidentsService.updateStatus as any).mockRejectedValue(new Error("Update failed"));
+
+      await wrapper.vm.acknowledgeIncident();
+
+      expect(mockToast).toHaveBeenCalled();
+      const call = mockToast.mock.calls[0][0];
+      expect(call.variant).toBe("error");
+    });
+
+    it("should update local incident state on success", async () => {
+      (incidentsService.updateStatus as any).mockResolvedValue({
+        data: { status: "acknowledged", updated_at: 1700000001000000 },
+      });
+
+      const originalStatus = wrapper.vm.incidentDetails.status;
+      await wrapper.vm.acknowledgeIncident();
+
+      expect(wrapper.vm.incidentDetails.status).toBe("acknowledged");
+    });
+
+    it("should not update status when no incident loaded", async () => {
+      wrapper.vm.incidentDetails = null;
+
+      await wrapper.vm.acknowledgeIncident();
+
+      expect(incidentsService.updateStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("RCA Functionality", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper({}, {}, "1");
+
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("should check for existing RCA", () => {
+      wrapper.vm.incidentDetails.topology_context = {
+        nodes: [],
+        edges: [],
+        related_incident_ids: [],
+        suggested_root_cause: "Existing RCA content",
+      };
+
+      expect(wrapper.vm.hasExistingRca).toBe(true);
+    });
+
+    it("should return false when no RCA exists", () => {
+      wrapper.vm.incidentDetails.topology_context = {
+        nodes: [],
+        edges: [],
+        related_incident_ids: [],
+      };
+
+      expect(wrapper.vm.hasExistingRca).toBe(false);
+    });
+
+    it("should trigger RCA analysis", async () => {
+      await wrapper.vm.triggerRca();
+
+      expect(incidentsService.triggerRca).toHaveBeenCalledWith("default", "1");
+    });
+
+    it("should set loading state during RCA", async () => {
+      const rcaPromise = wrapper.vm.triggerRca();
+
+      expect(wrapper.vm.rcaLoading).toBe(true);
+
+      await rcaPromise;
+
+      expect(wrapper.vm.rcaLoading).toBe(false);
+    });
+
+    it("should display RCA content after trigger", async () => {
+      await wrapper.vm.triggerRca();
+
+      expect(wrapper.vm.rcaStreamContent).toContain("Root Cause Analysis");
+    });
+
+    it("should show success notification after RCA", async () => {
+      mockToast.mockClear();
+
+      await wrapper.vm.triggerRca();
+
+      expect(mockToast).toHaveBeenCalled();
+      const successCall = mockToast.mock.calls.find((c: any[]) => c[0].variant === "success");
+      expect(successCall).toBeTruthy();
+    });
+
+    it("should reload incident details after RCA", async () => {
+      vi.clearAllMocks();
+
+      await wrapper.vm.triggerRca();
+
+      // Should call get twice: once for initial load, once for reload
+      expect(incidentsService.get).toHaveBeenCalled();
+    });
+
+    it("should handle RCA error", async () => {
+      mockToast.mockClear();
+      (incidentsService.triggerRca as any).mockRejectedValue(new Error("RCA failed"));
+
+      await wrapper.vm.triggerRca();
+
+      expect(mockToast).toHaveBeenCalled();
+      const errCall = mockToast.mock.calls.find((c: any[]) => c[0].variant === "error");
+      expect(errCall).toBeTruthy();
+    });
+
+    it("should clear RCA content on error", async () => {
+      (incidentsService.triggerRca as any).mockRejectedValue(new Error("RCA failed"));
+
+      wrapper.vm.rcaStreamContent = "Some content";
+      await wrapper.vm.triggerRca();
+
+      expect(wrapper.vm.rcaStreamContent).toBe("");
+    });
+
+    it("should not trigger RCA when no incident loaded", async () => {
+      wrapper.vm.incidentDetails = null;
+
+      await wrapper.vm.triggerRca();
+
+      expect(incidentsService.triggerRca).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("SRE Chat Integration", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper({}, {}, "1");
+
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("should compute incident context data correctly", () => {
+      const contextData = wrapper.vm.incidentContextData;
+
+      expect(contextData).toBeTruthy();
+      expect(contextData.id).toBe("1");
+      expect(contextData.severity).toBe("P1");
+      expect(contextData.status).toBe("open");
+    });
+
+    it("should include all required fields in context data", () => {
+      const contextData = wrapper.vm.incidentContextData;
+
+      expect(contextData).toHaveProperty("id");
+      expect(contextData).toHaveProperty("title");
+      expect(contextData).toHaveProperty("status");
+      expect(contextData).toHaveProperty("severity");
+      expect(contextData).toHaveProperty("alert_count");
+      expect(contextData).toHaveProperty("first_alert_at");
+      expect(contextData).toHaveProperty("last_alert_at");
+      expect(contextData).toHaveProperty("group_values");
+      expect(contextData).toHaveProperty("topology_context");
+      expect(contextData).toHaveProperty("triggers");
+      expect(contextData).toHaveProperty("rca_analysis");
+    });
+
+    it("should include triggers in context data", () => {
+      const contextData = wrapper.vm.incidentContextData;
+
+      expect(contextData.triggers).toBeTruthy();
+      expect(Array.isArray(contextData.triggers)).toBe(true);
+    });
+
+    it("should include existing RCA in context data when available", async () => {
+      wrapper.vm.incidentDetails.topology_context = {
+        nodes: [],
+        edges: [],
+        related_incident_ids: [],
+        suggested_root_cause: "Existing RCA",
+      };
+
+      await nextTick();
+
+      const contextData = wrapper.vm.incidentContextData;
+      expect(contextData.rca_analysis).toBe("Existing RCA");
+    });
+
+    it("should include stream content when no existing RCA", async () => {
+      wrapper.vm.rcaStreamContent = "Streaming RCA content";
+      wrapper.vm.incidentDetails.topology_context = undefined;
+
+      await nextTick();
+
+      const contextData = wrapper.vm.incidentContextData;
+      expect(contextData.rca_analysis).toBe("Streaming RCA content");
+    });
+  });
+
+  describe("Utility Functions - Status Variants", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper();
+    });
+
+    it("should return correct variant for open status", () => {
+      expect(wrapper.vm.getStatusVariant("open")).toBe("error-soft");
+    });
+
+    it("should return correct variant for acknowledged status", () => {
+      expect(wrapper.vm.getStatusVariant("acknowledged")).toBe("warning-soft");
+    });
+
+    it("should return correct variant for resolved status", () => {
+      expect(wrapper.vm.getStatusVariant("resolved")).toBe("success-soft");
+    });
+
+    it("should return default-soft for unknown status", () => {
+      expect(wrapper.vm.getStatusVariant("unknown")).toBe("default-soft");
+    });
+  });
+
+  describe("Utility Functions - Status Labels", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper();
+    });
+
+    it("should return translated label for open status", () => {
+      const label = wrapper.vm.getStatusLabel("open");
+      expect(label).toBeTruthy();
+      expect(typeof label).toBe("string");
+    });
+
+    it("should return translated label for acknowledged status", () => {
+      const label = wrapper.vm.getStatusLabel("acknowledged");
+      expect(label).toBeTruthy();
+      expect(typeof label).toBe("string");
+    });
+
+    it("should return translated label for resolved status", () => {
+      const label = wrapper.vm.getStatusLabel("resolved");
+      expect(label).toBeTruthy();
+      expect(typeof label).toBe("string");
+    });
+
+    it("should return status as-is for unknown status", () => {
+      expect(wrapper.vm.getStatusLabel("custom-status")).toBe("custom-status");
+    });
+  });
+
+  describe("Utility Functions - Timestamp Formatting", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper();
+    });
+
+    it("should format timestamp in microseconds correctly", () => {
+      const timestamp = 1700000000000000; // microseconds
+      const result = wrapper.vm.formatTimestamp(timestamp);
+
+      expect(result).toBeTruthy();
+      expect(typeof result).toBe("string");
+      expect(result).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+    });
+
+    it("should handle zero timestamp", () => {
+      const result = wrapper.vm.formatTimestamp(0);
+
+      expect(result).toBeTruthy();
+      expect(result).toMatch(/\d{4}-\d{2}-\d{2}/);
+    });
+
+    it("should convert microseconds to milliseconds correctly", () => {
+      const microTimestamp = 1700000000000000;
+      const result = wrapper.vm.formatTimestamp(microTimestamp);
+
+      expect(result).toContain("2023");
+    });
+  });
+
+  describe("Utility Functions - RCA Content Formatting", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper();
+    });
+
+    it("should sanitize malicious HTML content", () => {
+      const malicious = '<script>alert("xss")</script>';
+      const formatted = wrapper.vm.formatRcaContent(malicious);
+
+      // DOMPurify completely removes script tags (better than escaping)
+      expect(formatted).not.toContain("<script>");
+      expect(formatted).not.toContain('alert("xss")');
+    });
+
+    it("should format bold text", () => {
+      const content = "This is **bold** text";
+      const formatted = wrapper.vm.formatRcaContent(content);
+
+      expect(formatted).toContain('<strong class="tw:font-semibold">bold</strong>');
+    });
+
+    it("should format h2 headers", () => {
+      const content = "## Header 2";
+      const formatted = wrapper.vm.formatRcaContent(content);
+
+      expect(formatted).toContain("tw:font-bold");
+      expect(formatted).toContain("tw:text-lg");
+      expect(formatted).toContain("tw:text-blue-600");
+    });
+
+    it("should format h3 headers", () => {
+      const content = "### Header 3";
+      const formatted = wrapper.vm.formatRcaContent(content);
+
+      expect(formatted).toContain("tw:font-semibold");
+    });
+
+    it("should format unordered lists", () => {
+      const content = "- Item 1\n- Item 2";
+      const formatted = wrapper.vm.formatRcaContent(content);
+
+      expect(formatted).toContain("rca-ul");
+      expect(formatted).toContain("Item 1");
+    });
+
+    it("should format numbered lists", () => {
+      const content = "1. First item\n2. Second item";
+      const formatted = wrapper.vm.formatRcaContent(content);
+
+      expect(formatted).toContain("rca-ol");
+      expect(formatted).toContain("First item");
+      expect(formatted).toContain("Second item");
+    });
+
+    it("should format complex markdown", () => {
+      const content = "## Root Cause\n\n**Issue**: High CPU\n\n- Check process\n- Review logs";
+      const formatted = wrapper.vm.formatRcaContent(content);
+
+      expect(formatted).toContain('<strong class="tw:font-semibold">Issue</strong>');
+      expect(formatted).toContain("tw:font-bold");
+      expect(formatted).toContain("rca-ul");
+    });
+  });
+
+  describe("Theme Support", () => {
+    it("should detect dark mode", async () => {
+      store.state.theme = "dark";
+      wrapper = await createWrapper();
+
+      expect(wrapper.vm.isDarkMode).toBe(true);
+    });
+
+    it("should detect light mode", async () => {
+      store.state.theme = "light";
+      wrapper = await createWrapper();
+
+      expect(wrapper.vm.isDarkMode).toBe(false);
+    });
+  });
+
+  describe("Topology Context", () => {
+    beforeEach(async () => {
+      const mockIncidentData = createIncidentWithAlerts({
+        id: "test-123",
+        topology_context: {
+          nodes: [
+            {
+              alert_id: "alert_cpu",
+              alert_name: "High CPU",
+              service_name: "api-gateway",
+              alert_count: 2,
+              first_fired_at: 1000,
+              last_fired_at: 2000,
+            },
+            {
+              alert_id: "alert_memory",
+              alert_name: "High Memory",
+              service_name: "auth-service",
+              alert_count: 1,
+              first_fired_at: 1500,
+              last_fired_at: 1500,
+            },
+          ],
+          edges: [
+            {
+              from_node_index: 0,
+              to_node_index: 1,
+              edge_type: "service_dependency",
+            },
+          ],
+          related_incident_ids: ["incident-2", "incident-3"],
+          suggested_root_cause: "High memory usage in auth-service",
+        },
+      });
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: mockIncidentData,
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("should display topology nodes", () => {
+      expect(wrapper.vm.incidentDetails.topology_context.nodes).toHaveLength(2);
+      expect(wrapper.vm.incidentDetails.topology_context.nodes[0].alert_name).toBe("High CPU");
+    });
+
+    it("should display topology edges", () => {
+      expect(wrapper.vm.incidentDetails.topology_context.edges).toHaveLength(1);
+      expect(wrapper.vm.incidentDetails.topology_context.edges[0].edge_type).toBe("service_dependency");
+    });
+  });
+
+  describe("Edge Cases", () => {
+    it("should handle incident without title", async () => {
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", title: undefined }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.incidentDetails).toBeTruthy();
+    });
+
+    it("should handle empty triggers array", async () => {
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers: [] }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.triggers).toEqual([]);
+    });
+
+    it("should handle missing topology context", async () => {
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", topology_context: undefined }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.incidentDetails.topology_context).toBeUndefined();
+      expect(wrapper.vm.hasExistingRca).toBe(false);
+    });
+
+    it("should handle empty dimensions", async () => {
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", group_values: {} }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.incidentDetails.group_values).toEqual({});
+    });
+
+    it("should handle resolved incident with timestamp", async () => {
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({
+          id: "test-123",
+          status: "resolved",
+          resolved_at: 1700000000000000,
+        }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.incidentDetails.resolved_at).toBeTruthy();
+    });
+  });
+
+  describe("Close Functionality", () => {
+    it("should close drawer", async () => {
+      wrapper = await createWrapper();
+      const pushSpy = vi.spyOn(router, 'push');
+
+      wrapper.vm.close();
+      await nextTick();
+
+      // Should navigate back to incident list
+      expect(pushSpy).toHaveBeenCalledWith({ name: "incidentList", query: { org_identifier: "default" } });
+    });
+
+    it("should navigate back to incident list on close", async () => {
+      wrapper = await createWrapper();
+      const pushSpy = vi.spyOn(router, 'push');
+
+      wrapper.vm.close();
+      await nextTick();
+
+      // Verify navigation to incident list
+      expect(pushSpy).toHaveBeenCalledWith({ name: "incidentList", query: { org_identifier: "default" } });
+    });
+  });
+
+  describe("Organization Context", () => {
+    it("should use correct organization from store", async () => {
+      wrapper = await createWrapper(
+        {},
+        { selectedOrganization: { identifier: "custom-org" } },
+        "test-123"
+      );
+
+      await nextTick();
+      await flushPromises();
+
+      expect(incidentsService.get).toHaveBeenCalledWith("custom-org", "test-123");
+    });
+
+    it("should use organization in status updates", async () => {
+      (incidentsService.updateStatus as any).mockResolvedValue({});
+
+      wrapper = await createWrapper(
+        {},
+        { selectedOrganization: { identifier: "org-123" } },
+        "1"
+      );
+
+      await nextTick();
+      await flushPromises();
+
+      await wrapper.vm.acknowledgeIncident();
+
+      expect(incidentsService.updateStatus).toHaveBeenCalledWith(
+        "org-123",
+        expect.any(String),
+        "acknowledged"
+      );
+    });
+
+    it("should use organization in RCA trigger", async () => {
+      wrapper = await createWrapper(
+        {},
+        { selectedOrganization: { identifier: "org-456" } },
+        "1"
+      );
+
+      await nextTick();
+      await flushPromises();
+
+      await wrapper.vm.triggerRca();
+
+      expect(incidentsService.triggerRca).toHaveBeenCalledWith(
+        "org-456",
+        expect.any(String)
+      );
+    });
+  });
+
+  describe("Unique Alerts Computation", () => {
+    it("should compute unique alerts map from triggers", async () => {
+      const triggers = [
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-2", alert_name: "Memory Alert" }),
+        createAlert({ alert_id: "alert-3", alert_name: "Disk Alert" }),
+        createAlert({ alert_id: "alert-2", alert_name: "Memory Alert" }),
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      const uniqueAlertsMap = wrapper.vm.uniqueAlertsMap;
+
+      expect(uniqueAlertsMap.size).toBe(3);
+      expect(uniqueAlertsMap.get("alert-1")).toBe(2);
+      expect(uniqueAlertsMap.get("alert-2")).toBe(2);
+      expect(uniqueAlertsMap.get("alert-3")).toBe(1);
+    });
+
+    it("should compute unique alerts count correctly", async () => {
+      const triggers = [
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-2", alert_name: "Memory Alert" }),
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.uniqueAlertsCount).toBe(2);
+    });
+
+    it("should return 0 unique alerts when no triggers", async () => {
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers: [] }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.uniqueAlertsCount).toBe(0);
+      expect(wrapper.vm.uniqueAlertsMap.size).toBe(0);
+    });
+
+    it("should handle triggers with missing alert names", async () => {
+      // Create triggers directly without using factory to avoid default values
+      const triggers: IncidentAlert[] = [
+        {
+          incident_id: "incident-1",
+          alert_id: "alert-1",
+          alert_name: "" as any, // Empty string, but we use alert_id for uniqueness
+          alert_fired_at: 1700000000000000,
+          correlation_reason: "service_discovery",
+          created_at: 1700000000000000,
+        },
+        createAlert({ alert_id: "alert-2", alert_name: "Valid Alert" }),
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      const uniqueAlertsMap = wrapper.vm.uniqueAlertsMap;
+
+      // Should have 2 unique alerts by alert_id regardless of alert_name
+      expect(uniqueAlertsMap.size).toBe(2);
+      // Check by alert_id instead of alert_name
+      const alert1Count = uniqueAlertsMap.get("alert-1");
+      const alert2Count = uniqueAlertsMap.get("alert-2");
+
+      expect(alert1Count).toBeDefined();
+      expect(alert1Count).toBe(1);
+      expect(alert2Count).toBeDefined();
+      expect(alert2Count).toBe(1);
+    });
+
+    it("should count alerts with same name but different IDs as separate alerts", async () => {
+      // This test verifies the fix: uniqueness should be by alert_id, not alert_name
+      const triggers = [
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-2", alert_name: "High CPU" }),  // Same name, different ID
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-3", alert_name: "High CPU" }),  // Same name, different ID
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      const uniqueAlertsMap = wrapper.vm.uniqueAlertsMap;
+
+      // Should have 3 unique alerts by alert_id (alert-1, alert-2, alert-3)
+      // even though all have the same name "High CPU"
+      expect(uniqueAlertsMap.size).toBe(3);
+      expect(wrapper.vm.uniqueAlertsCount).toBe(3);
+      expect(uniqueAlertsMap.get("alert-1")).toBe(2);
+      expect(uniqueAlertsMap.get("alert-2")).toBe(1);
+      expect(uniqueAlertsMap.get("alert-3")).toBe(1);
+    });
+  });
+
+  describe("Sorted Alerts By Trigger Count", () => {
+    it("should sort alerts by trigger count descending", async () => {
+      const triggers = [
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-1", alert_name: "High CPU" }),
+        createAlert({ alert_id: "alert-2", alert_name: "Memory Alert" }),
+        createAlert({ alert_id: "alert-2", alert_name: "Memory Alert" }),
+        createAlert({ alert_id: "alert-3", alert_name: "Disk Alert" }),
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      const sorted = wrapper.vm.sortedAlertsByTriggerCount;
+
+      expect(sorted).toHaveLength(3);
+      expect(sorted[0].name).toBe("High CPU");
+      expect(sorted[0].count).toBe(3);
+      expect(sorted[1].name).toBe("Memory Alert");
+      expect(sorted[1].count).toBe(2);
+      expect(sorted[2].name).toBe("Disk Alert");
+      expect(sorted[2].count).toBe(1);
+    });
+
+    it("should return empty array when no triggers", async () => {
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers: [] }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      expect(wrapper.vm.sortedAlertsByTriggerCount).toEqual([]);
+    });
+
+    it("should include alert id and name in sorted results", async () => {
+      const triggers = [
+        createAlert({ alert_id: "alert-1", alert_name: "Test Alert" }),
+        createAlert({ alert_id: "alert-1", alert_name: "Test Alert" }),
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: createIncidentWithAlerts({ id: "test-123", triggers }),
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      const sorted = wrapper.vm.sortedAlertsByTriggerCount;
+
+      expect(sorted[0]).toHaveProperty("id");
+      expect(sorted[0]).toHaveProperty("name");
+      expect(sorted[0]).toHaveProperty("count");
+      expect(sorted[0].id).toBe("alert-1");
+      expect(sorted[0].name).toBe("Test Alert");
+      expect(sorted[0].count).toBe(2);
+    });
+
+    it("should derive alerts from triggers instead of API alerts array", async () => {
+      const triggers = [
+        createAlert({ alert_id: "trigger-alert-1", alert_name: "From Triggers" }),
+      ];
+
+      (incidentsService.get as any).mockResolvedValue({
+        data: {
+          ...createIncidentWithAlerts({ id: "test-123", triggers }),
+          alerts: [], // Empty alerts array from API
+        },
+      });
+
+      wrapper = await createWrapper({}, {}, "test-123");
+      await nextTick();
+      await flushPromises();
+
+      const sorted = wrapper.vm.sortedAlertsByTriggerCount;
+
+      // Should have 1 alert from triggers, not 0 from API alerts
+      expect(sorted).toHaveLength(1);
+      expect(sorted[0].name).toBe("From Triggers");
+    });
+  });
+
+  describe("Internationalization (i18n)", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper({}, {}, "1");
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("should have translation for unique alerts", () => {
+      const translation = wrapper.vm.t("alerts.incidents.uniqueAlerts");
+      expect(translation).toBe("Unique Alerts");
+    });
+
+    it("should have translation for related alerts", () => {
+      const translation = wrapper.vm.t("alerts.incidents.relatedAlerts");
+      expect(translation).toBe("Related Alerts");
+    });
+
+    it("should have translation for alert triggers", () => {
+      const translation = wrapper.vm.t("alerts.incidents.alertTriggers");
+      expect(translation).toBe("Alert Triggers");
+    });
+
+    it("should have translation for incident timeline", () => {
+      const translation = wrapper.vm.t("alerts.incidents.incidentTimeline");
+      expect(translation).toBe("Incident Timeline");
+    });
+
+    it("should have translation for incident details", () => {
+      const translation = wrapper.vm.t("alerts.incidents.incidentDetails");
+      expect(translation).toBe("Incident Details");
+    });
+
+    it("should have translation for fired times with parameter", () => {
+      const translation = wrapper.vm.t("alerts.incidents.firedTimes", { count: 5 });
+      expect(translation).toBe("Fired 5 time(s)");
+    });
+
+    it("should have translation for refresh correlated data", () => {
+      const translation = wrapper.vm.t("alerts.incidents.refreshCorrelatedData");
+      expect(translation).toBe("Refresh correlated data");
+    });
+
+    it("should have translation for incident title updated success", () => {
+      const translation = wrapper.vm.t("alerts.incidents.incidentTitleUpdatedSuccess");
+      expect(translation).toBe("Incident title updated successfully");
+    });
+  });
+
+  // Note: Child component integration tests removed
+  // These should be tested in the child components' own test files (CorrelatedLogsTable.spec.ts)
+  // Parent component responsibility is tested through computed properties and state management
+
+  // Note: Field Name Mapping integration tests removed
+  // These tests depend on complex child component interactions and conditional rendering
+  // Parent component's field name mapping logic should be tested through unit tests of computed properties
+
+  // Note: Send to AI Chat integration tests removed
+  // Event propagation from child components should be tested in their own test files
+  // Parent component's event handling should be tested through direct method calls
+
+  // Note: Metrics and Traces Tabs integration tests removed
+  // Testing child component prop bindings through complex conditional rendering is problematic
+  // These should be tested through computed properties and direct prop assertions
+
+  describe("subject tabs (View by) — matchedSetId / chipDimensions", () => {
+    // Regression: the embedded TelemetryCorrelationDashboard never received
+    // matchedSetId/chipDimensions, so its "View by" subject toggle never rendered.
+    const correlatedStreamsWithSet = () => ({
+      serviceName: "checkout",
+      matchedDimensions: { "k8s-pod-name": "pod-abc" },
+      additionalDimensions: {},
+      logStreams: [],
+      metricStreams: [
+        { stream_name: "k8s_metrics", stream_type: "Metrics", filters: { k8s_pod_name: "pod-abc" } },
+      ],
+      traceStreams: [],
+      correlationData: {
+        service_name: "checkout",
+        matched_dimensions: { "k8s-pod-name": "pod-abc" },
+        additional_dimensions: {},
+        related_streams: {
+          logs: [],
+          metrics: [
+            { stream_name: "k8s_metrics", stream_type: "Metrics", filters: { k8s_pod_name: "pod-abc" } },
+          ],
+          traces: [],
+        },
+        matched_set_id: "kubernetes",
+      },
+    });
+
+    beforeEach(async () => {
+      (buildChipDimensionsFromFilters as any).mockReturnValue({ k8s_pod_name: "pod-abc" });
+      wrapper = await createWrapper({}, {}, "1");
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("should expose matched_set_id as correlationMatchedSetId after correlation loads", async () => {
+      (incidentsService.getCorrelatedStreams as any).mockResolvedValue(correlatedStreamsWithSet());
+
+      await wrapper.vm.refreshCorrelation();
+      await flushPromises();
+
+      expect(wrapper.vm.correlationMatchedSetId).toBe("kubernetes");
+    });
+
+    it("should build chipDimensions from the correlation response and semantic groups", async () => {
+      (incidentsService.getCorrelatedStreams as any).mockResolvedValue(correlatedStreamsWithSet());
+
+      await wrapper.vm.refreshCorrelation();
+      await flushPromises();
+
+      // Access the (lazy) computed first so it evaluates and invokes the helper.
+      expect(wrapper.vm.correlationChipDimensions).toEqual({ k8s_pod_name: "pod-abc" });
+
+      const resp = correlatedStreamsWithSet().correlationData;
+      expect(buildChipDimensionsFromFilters).toHaveBeenCalledWith(
+        expect.objectContaining({ matched_set_id: resp.matched_set_id }),
+        expect.any(Array),
+      );
+    });
+
+    it("should yield undefined matchedSetId and empty chipDimensions when no correlation data", () => {
+      expect(wrapper.vm.correlationData).toBeNull();
+      expect(wrapper.vm.correlationMatchedSetId).toBeUndefined();
+      expect(wrapper.vm.correlationChipDimensions).toEqual({});
+    });
+
+    it("should pass matchedSetId/chipDimensions to the metrics TelemetryCorrelationDashboard", async () => {
+      (incidentsService.getCorrelatedStreams as any).mockResolvedValue(correlatedStreamsWithSet());
+
+      await wrapper.vm.refreshCorrelation();
+      // activeTab is the tabs v-model; set it directly since reaching the
+      // metrics panel via DOM tab clicks depends on brittle conditional markup.
+      wrapper.vm.activeTab = "metrics";
+      await nextTick();
+      await flushPromises();
+
+      const dashboard = wrapper
+        .findAllComponents({ name: "TelemetryCorrelationDashboard" })
+        .find((c) => c.props("externalActiveTab") === "metrics");
+      expect(dashboard?.exists()).toBe(true);
+      expect(dashboard?.props("matchedSetId")).toBe("kubernetes");
+      expect(dashboard?.props("chipDimensions")).toEqual({ k8s_pod_name: "pod-abc" });
+    });
+  });
+
+  // Note: Loading State Centering tests removed
+  // Testing loading state UI presentation is better handled through visual regression tests
+  // Component logic tests should focus on loading state management, not CSS/layout
+
+  describe("analysisInFlight - checkAnalysisInFlight", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper({}, {}, "1");
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("should initialize analysisInFlight as false", () => {
+      expect(wrapper.vm.analysisInFlight).toBe(false);
+    });
+
+    it("sets analysisInFlight true when lastBegin > lastComplete", async () => {
+      (incidentsService.getEvents as any).mockResolvedValue({
+        data: {
+          events: [
+            { type: "ai_analysis_begin", timestamp: 200 },
+            { type: "ai_analysis_complete", timestamp: 100 },
+          ],
+        },
+      });
+      await wrapper.vm.checkAnalysisInFlight("1");
+      await flushPromises();
+      expect(wrapper.vm.analysisInFlight).toBe(true);
+    });
+
+    it("sets analysisInFlight false when lastComplete >= lastBegin", async () => {
+      (incidentsService.getEvents as any).mockResolvedValue({
+        data: {
+          events: [
+            { type: "ai_analysis_begin", timestamp: 100 },
+            { type: "ai_analysis_complete", timestamp: 200 },
+          ],
+        },
+      });
+      await wrapper.vm.checkAnalysisInFlight("1");
+      await flushPromises();
+      expect(wrapper.vm.analysisInFlight).toBe(false);
+    });
+
+    it("sets analysisInFlight false when ai_analysis_failed after ai_analysis_begin", async () => {
+      (incidentsService.getEvents as any).mockResolvedValue({
+        data: {
+          events: [
+            { type: "ai_analysis_begin", timestamp: 100 },
+            { type: "ai_analysis_failed", timestamp: 200, data: { reason: "timeout", error_details: "Query timed out" } },
+          ],
+        },
+      });
+      await wrapper.vm.checkAnalysisInFlight("1");
+      await flushPromises();
+      expect(wrapper.vm.analysisInFlight).toBe(false);
+    });
+
+    it("sets analysisInFlight false when events are empty", async () => {
+      (incidentsService.getEvents as any).mockResolvedValue({ data: { events: [] } });
+      await wrapper.vm.checkAnalysisInFlight("1");
+      await flushPromises();
+      expect(wrapper.vm.analysisInFlight).toBe(false);
+    });
+
+    it("handles API error gracefully and sets analysisInFlight to false", async () => {
+      (incidentsService.getEvents as any).mockRejectedValue(new Error("fetch failed"));
+      wrapper.vm.analysisInFlight = true; // set to true first
+      await wrapper.vm.checkAnalysisInFlight("1");
+      await flushPromises();
+      expect(wrapper.vm.analysisInFlight).toBe(false);
+    });
+
+    it("calls getEvents with correct org and incidentId", async () => {
+      await wrapper.vm.checkAnalysisInFlight("incident-xyz");
+      await flushPromises();
+      expect(incidentsService.getEvents).toHaveBeenCalledWith("default", "incident-xyz");
+    });
+  });
+
+  describe("updateSeverity - reanalysis prompt", () => {
+    beforeEach(async () => {
+      wrapper = await createWrapper({}, {}, "1");
+      await nextTick();
+      await flushPromises();
+    });
+
+    it("calls updateIncident with correct org, id and severity", async () => {
+      await wrapper.vm.updateSeverity("P3");
+      await flushPromises();
+      expect(incidentsService.updateIncident).toHaveBeenCalledWith("default", "1", { severity: "P3" });
+    });
+
+    it("updates local severity after successful save", async () => {
+      (incidentsService.updateIncident as any).mockResolvedValue({ data: { severity: "P3" } });
+      await wrapper.vm.updateSeverity("P3");
+      await flushPromises();
+      expect(wrapper.vm.incidentDetails.severity).toBe("P3");
+      expect(wrapper.vm.editableSeverity).toBe("P3");
+    });
+
+    it("shows info notification when analysis_in_flight=true in response", async () => {
+      mockToast.mockClear();
+      (incidentsService.updateIncident as any).mockResolvedValue({
+        data: { severity: "P2", analysis_in_flight: true },
+      });
+      await wrapper.vm.updateSeverity("P2");
+      await flushPromises();
+      const infoCall = mockToast.mock.calls.find((c: any[]) => c[0].variant === "info");
+      expect(infoCall).toBeTruthy();
+      expect(infoCall[0].message).toContain("already running");
+    });
+
+    it("sets analysisInFlight=true when response has analysis_in_flight=true", async () => {
+      (incidentsService.updateIncident as any).mockResolvedValue({
+        data: { severity: "P2", analysis_in_flight: true },
+      });
+      await wrapper.vm.updateSeverity("P2");
+      await flushPromises();
+      expect(wrapper.vm.analysisInFlight).toBe(true);
+    });
+
+    it("does not call updateIncident when no incidentDetails", async () => {
+      wrapper.vm.incidentDetails = null;
+      await wrapper.vm.updateSeverity("P3");
+      expect(incidentsService.updateIncident).not.toHaveBeenCalled();
+    });
+
+    it("sets updating=false after completion", async () => {
+      await wrapper.vm.updateSeverity("P2");
+      await flushPromises();
+      expect(wrapper.vm.updating).toBe(false);
+    });
+
+    it("handles API error and sets updating=false", async () => {
+      mockToast.mockClear();
+      (incidentsService.updateIncident as any).mockRejectedValue(new Error("API error"));
+      await wrapper.vm.updateSeverity("P3");
+      await flushPromises();
+      expect(wrapper.vm.updating).toBe(false);
+    });
+  });
+});

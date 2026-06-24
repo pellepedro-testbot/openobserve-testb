@@ -1,0 +1,1133 @@
+// Copyright 2026 OpenObserve Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+use std::{collections::HashMap as stdHashMap, sync::LazyLock as Lazy};
+
+use async_trait::async_trait;
+use config::{
+    get_config,
+    meta::{
+        meta_store::MetaStore,
+        stream::{FileKey, FileListDeleted, FileMeta, PartitionTimeLevel, StreamStats, StreamType},
+    },
+    utils::time::second_micros,
+};
+
+use crate::errors::{Error, Result};
+
+pub mod postgres;
+pub mod sqlite;
+
+static CLIENT: Lazy<Box<dyn FileList>> = Lazy::new(connect_default);
+pub static LOCAL_CACHE: Lazy<Box<dyn FileList>> = Lazy::new(connect_local_cache);
+
+pub fn connect_default() -> Box<dyn FileList> {
+    match get_config().common.meta_store.as_str().into() {
+        MetaStore::Sqlite => Box::<sqlite::SqliteFileList>::default(),
+        MetaStore::Nats => Box::<sqlite::SqliteFileList>::default(),
+        MetaStore::PostgreSQL => Box::<postgres::PostgresFileList>::default(),
+    }
+}
+
+pub fn connect_local_cache() -> Box<dyn FileList> {
+    Box::<sqlite::SqliteFileList>::default()
+}
+
+#[async_trait]
+pub trait FileList: Sync + Send + 'static {
+    async fn health_check(&self) -> Result<()>;
+    async fn create_table(&self) -> Result<()>;
+    async fn create_table_index(&self) -> Result<()>;
+    async fn add(&self, account: &str, file: &str, meta: &FileMeta) -> Result<i64>;
+    async fn add_history(&self, account: &str, file: &str, meta: &FileMeta) -> Result<i64>;
+    async fn remove(&self, file: &str) -> Result<()>;
+    async fn batch_add(&self, files: &[FileKey]) -> Result<()>;
+    async fn batch_add_with_id(&self, files: &[FileKey]) -> Result<()>;
+    async fn batch_add_history(&self, files: &[FileKey]) -> Result<()>;
+    async fn update_dump_records(&self, dump_file: &FileKey, dumped_ids: &[i64]) -> Result<()>;
+    async fn batch_process(&self, files: &[FileKey]) -> Result<()>;
+    async fn batch_add_deleted(
+        &self,
+        org_id: &str,
+        created_at: i64,
+        files: &[FileListDeleted],
+    ) -> Result<()>;
+    async fn batch_remove_deleted(&self, files: &[FileKey]) -> Result<()>;
+    async fn get(&self, file: &str) -> Result<FileMeta>;
+    async fn contains(&self, file: &str) -> Result<bool>;
+    async fn update_flattened(&self, file: &str, flattened: bool) -> Result<()>;
+    async fn update_compressed_size(&self, file: &str, size: i64) -> Result<()>;
+    /// Bulk-set `bloom_ver` for the given file_list ids. Used by the
+    /// post-merge bloom builder (enterprise `bloom::compact`).
+    /// Empty `ids` is a no-op.
+    async fn update_bloom_ver(&self, ids: &[i64], bloom_ver: i64) -> Result<()>;
+    /// Is `bloom_ver` still referenced by at least one live file_list row in
+    /// this `(stream, date)` bucket? Used by the post-merge orphan cleanup to
+    /// decide whether a `.bf` can be retired. `stream` is the combined
+    /// `{org}/{stream_type}/{stream}` key; `date` is the `YYYY/MM/DD/HH` value.
+    async fn bloom_ver_referenced(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        date: &str,
+        bloom_ver: i64,
+    ) -> Result<bool>;
+    async fn list(&self) -> Result<Vec<FileKey>>;
+    async fn query(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        time_level: PartitionTimeLevel,
+        time_range: (i64, i64),
+        flattened: Option<bool>,
+    ) -> Result<Vec<FileKey>>;
+    async fn query_for_merge(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        date_range: (String, String),
+    ) -> Result<Vec<FileKey>>;
+    async fn query_for_dump(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        time_range: (i64, i64),
+    ) -> Result<Vec<FileRecord>>;
+    async fn query_for_dump_by_updated_at(&self, time_range: (i64, i64))
+    -> Result<Vec<FileRecord>>;
+    async fn query_for_bloom(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        date: &str,
+    ) -> Result<Vec<FileKey>>;
+    async fn query_by_ids(
+        &self,
+        ids: &[i64],
+        time_range: Option<(i64, i64)>,
+    ) -> Result<Vec<FileKey>>;
+    async fn query_ids(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        time_range: (i64, i64),
+    ) -> Result<Vec<FileId>>;
+    async fn query_ids_by_files(&self, files: &[FileKey]) -> Result<stdHashMap<String, i64>>;
+    async fn query_old_data_hours(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        time_range: (i64, i64),
+    ) -> Result<Vec<String>>;
+    async fn query_deleted(
+        &self,
+        org_id: &str,
+        time_max: i64,
+        limit: i64,
+    ) -> Result<Vec<FileListDeleted>>;
+    async fn list_deleted(&self) -> Result<Vec<FileListDeleted>>;
+    async fn get_min_date(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        date_range: Option<(String, String)>,
+    ) -> Result<String>;
+    async fn get_min_update_at(&self) -> Result<i64>;
+    async fn get_max_update_at(&self) -> Result<i64>;
+    async fn clean_by_min_update_at(&self, val: i64) -> Result<()>;
+
+    // stream stats table
+    async fn get_updated_streams(&self, time_range: (i64, i64)) -> Result<Vec<String>>;
+    async fn stats_by_date_range(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        date_range: (String, String),
+    ) -> Result<StreamStats>;
+    async fn get_stream_stats(
+        &self,
+        org_id: &str,
+        stream_type: Option<StreamType>,
+        stream_name: Option<&str>,
+    ) -> Result<Vec<(String, StreamStats)>>;
+    async fn del_stream_stats(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+    ) -> Result<()>;
+    async fn set_stream_stats(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        stats: &StreamStats,
+        is_recent: bool,
+    ) -> Result<()>;
+    async fn reset_stream_stats(&self) -> Result<()>;
+    async fn reset_stream_stats_min_ts(
+        &self,
+        org_id: &str,
+        stream: &str,
+        min_ts: i64,
+    ) -> Result<()>;
+    async fn len(&self) -> usize;
+    async fn is_empty(&self) -> bool;
+    async fn clear(&self) -> Result<()>;
+    // merge job
+    async fn add_job(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream: &str,
+        offset: i64,
+    ) -> Result<i64>;
+    async fn get_pending_jobs(
+        &self,
+        node: &str,
+        limit: i64,
+        fast_mode: bool,
+    ) -> Result<Vec<MergeJobRecord>>;
+    async fn get_pending_jobs_count(&self) -> Result<stdHashMap<String, stdHashMap<String, i64>>>;
+    async fn set_job_pending(&self, ids: &[i64], offsets: i64, stream: Option<&str>)
+    -> Result<u64>;
+    async fn set_job_done(&self, ids: &[i64]) -> Result<()>;
+    async fn update_running_jobs(&self, ids: &[i64]) -> Result<()>;
+    async fn check_running_jobs(&self, before_date: i64) -> Result<()>;
+    async fn clean_done_jobs(&self, before_date: i64) -> Result<()>;
+    async fn get_pending_dump_jobs(
+        &self,
+        node: &str,
+        limit: i64,
+    ) -> Result<Vec<(i64, String, i64)>>;
+    async fn set_job_dumped_status(&self, ids: &[i64], dumped: bool) -> Result<()>;
+
+    // file_list_dump_stats table methods
+    async fn insert_dump_stats(&self, file: &str, stats: &StreamStats) -> Result<()>;
+    async fn delete_dump_stats(&self, file: &str) -> Result<()>;
+    async fn query_dump_stats_by_date_range(
+        &self,
+        org_id: &str,
+        stream_type: StreamType,
+        stream_name: &str,
+        date_range: (String, String),
+    ) -> Result<StreamStats>;
+    async fn org_stats_by_account(&self, org_id: &str, account: &str) -> Result<(i64, i64)>;
+}
+
+pub async fn health_check() -> Result<()> {
+    CLIENT.health_check().await
+}
+
+pub async fn create_table() -> Result<()> {
+    CLIENT.create_table().await
+}
+
+pub async fn create_table_index() -> Result<()> {
+    CLIENT.create_table_index().await
+}
+
+#[inline]
+pub async fn add(account: &str, file: &str, meta: &FileMeta) -> Result<i64> {
+    CLIENT.add(account, file, meta).await
+}
+
+#[inline]
+pub async fn add_history(account: &str, file: &str, meta: &FileMeta) -> Result<i64> {
+    CLIENT.add_history(account, file, meta).await
+}
+
+#[inline]
+pub async fn remove(file: &str) -> Result<()> {
+    CLIENT.remove(file).await
+}
+
+#[inline]
+pub async fn batch_add(files: &[FileKey]) -> Result<()> {
+    CLIENT.batch_add(files).await
+}
+
+#[inline]
+pub async fn batch_add_history(files: &[FileKey]) -> Result<()> {
+    CLIENT.batch_add_history(files).await
+}
+
+#[inline]
+pub async fn batch_process(files: &[FileKey]) -> Result<()> {
+    CLIENT.batch_process(files).await
+}
+
+#[inline]
+pub async fn update_dump_records(dump_file: &FileKey, dumped_ids: &[i64]) -> Result<()> {
+    CLIENT.update_dump_records(dump_file, dumped_ids).await
+}
+
+#[inline]
+pub async fn batch_add_deleted(
+    org_id: &str,
+    created_at: i64,
+    files: &[FileListDeleted],
+) -> Result<()> {
+    CLIENT.batch_add_deleted(org_id, created_at, files).await
+}
+
+#[inline]
+pub async fn batch_remove_deleted(files: &[FileKey]) -> Result<()> {
+    CLIENT.batch_remove_deleted(files).await
+}
+
+#[inline]
+pub async fn get(file: &str) -> Result<FileMeta> {
+    CLIENT.get(file).await
+}
+
+#[inline]
+pub async fn contains(file: &str) -> Result<bool> {
+    CLIENT.contains(file).await
+}
+
+#[inline]
+pub async fn update_flattened(file: &str, flattened: bool) -> Result<()> {
+    CLIENT.update_flattened(file, flattened).await
+}
+
+#[inline]
+pub async fn update_bloom_ver(ids: &[i64], bloom_ver: i64) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    CLIENT.update_bloom_ver(ids, bloom_ver).await
+}
+
+#[inline]
+pub async fn bloom_ver_referenced(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    date: &str,
+    bloom_ver: i64,
+) -> Result<bool> {
+    CLIENT
+        .bloom_ver_referenced(org_id, stream_type, stream_name, date, bloom_ver)
+        .await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:update_compressed_size")]
+pub async fn update_compressed_size(file: &str, size: i64) -> Result<()> {
+    CLIENT.update_compressed_size(file, size).await
+}
+
+#[inline]
+pub async fn list() -> Result<Vec<FileKey>> {
+    CLIENT.list().await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query")]
+pub async fn query(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    time_level: PartitionTimeLevel,
+    time_range: (i64, i64),
+    flattened: Option<bool>,
+) -> Result<Vec<FileKey>> {
+    validate_time_range(time_range)?;
+    CLIENT
+        .query(
+            org_id,
+            stream_type,
+            stream_name,
+            time_level,
+            time_range,
+            flattened,
+        )
+        .await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query_for_merge")]
+pub async fn query_for_merge(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    date_range: (String, String),
+) -> Result<Vec<FileKey>> {
+    CLIENT
+        .query_for_merge(org_id, stream_type, stream_name, date_range)
+        .await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query_for_dump")]
+pub async fn query_for_dump(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    time_range: (i64, i64),
+) -> Result<Vec<FileRecord>> {
+    validate_time_range(time_range)?;
+    CLIENT
+        .query_for_dump(org_id, stream_type, stream_name, time_range)
+        .await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query_for_dump_by_updated_at")]
+pub async fn query_for_dump_by_updated_at(time_range: (i64, i64)) -> Result<Vec<FileRecord>> {
+    CLIENT.query_for_dump_by_updated_at(time_range).await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query_for_bloom")]
+pub async fn query_for_bloom(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    date: &str,
+) -> Result<Vec<FileKey>> {
+    CLIENT
+        .query_for_bloom(org_id, stream_type, stream_name, date)
+        .await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:query_db_by_ids", skip_all)]
+pub async fn query_by_ids(ids: &[i64], time_range: Option<(i64, i64)>) -> Result<Vec<FileKey>> {
+    if ids.is_empty() {
+        return Ok(Vec::default());
+    }
+    CLIENT.query_by_ids(ids, time_range).await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query_ids")]
+pub async fn query_ids(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    time_range: (i64, i64),
+) -> Result<Vec<FileId>> {
+    validate_time_range(time_range)?;
+    CLIENT
+        .query_ids(org_id, stream_type, stream_name, time_range)
+        .await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query_ids_by_files")]
+pub async fn query_ids_by_files(files: &[FileKey]) -> Result<stdHashMap<String, i64>> {
+    CLIENT.query_ids_by_files(files).await
+}
+
+#[inline]
+#[tracing::instrument(name = "infra:file_list:db:query_old_data_hours")]
+pub async fn query_old_data_hours(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    time_range: (i64, i64),
+) -> Result<Vec<String>> {
+    validate_time_range(time_range)?;
+    CLIENT
+        .query_old_data_hours(org_id, stream_type, stream_name, time_range)
+        .await
+}
+
+#[inline]
+pub async fn query_deleted(
+    org_id: &str,
+    time_max: i64,
+    limit: i64,
+) -> Result<Vec<FileListDeleted>> {
+    CLIENT.query_deleted(org_id, time_max, limit).await
+}
+
+#[inline]
+pub async fn list_deleted() -> Result<Vec<FileListDeleted>> {
+    CLIENT.list_deleted().await
+}
+
+#[inline]
+pub async fn get_min_date(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    date_range: Option<(String, String)>,
+) -> Result<String> {
+    CLIENT
+        .get_min_date(org_id, stream_type, stream_name, date_range)
+        .await
+}
+
+#[inline]
+pub async fn get_min_update_at() -> Result<i64> {
+    CLIENT.get_min_update_at().await
+}
+
+#[inline]
+pub async fn get_max_update_at() -> Result<i64> {
+    CLIENT.get_max_update_at().await
+}
+
+#[inline]
+pub async fn get_updated_streams(time_range: (i64, i64)) -> Result<Vec<String>> {
+    CLIENT.get_updated_streams(time_range).await
+}
+
+#[inline]
+pub async fn stats_by_date_range(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    date_range: (String, String),
+) -> Result<StreamStats> {
+    CLIENT
+        .stats_by_date_range(org_id, stream_type, stream_name, date_range)
+        .await
+}
+
+#[inline]
+pub async fn get_stream_stats(
+    org_id: &str,
+    stream_type: Option<StreamType>,
+    stream_name: Option<&str>,
+) -> Result<Vec<(String, StreamStats)>> {
+    CLIENT
+        .get_stream_stats(org_id, stream_type, stream_name)
+        .await
+}
+
+#[inline]
+pub async fn del_stream_stats(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+) -> Result<()> {
+    CLIENT
+        .del_stream_stats(org_id, stream_type, stream_name)
+        .await
+}
+
+#[inline]
+pub async fn set_stream_stats(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    stats: &StreamStats,
+    is_recent: bool,
+) -> Result<()> {
+    CLIENT
+        .set_stream_stats(org_id, stream_type, stream_name, stats, is_recent)
+        .await
+}
+
+#[inline]
+pub async fn reset_stream_stats() -> Result<()> {
+    CLIENT.reset_stream_stats().await
+}
+
+#[inline]
+pub async fn reset_stream_stats_min_ts(org_id: &str, stream: &str, min_ts: i64) -> Result<()> {
+    CLIENT
+        .reset_stream_stats_min_ts(org_id, stream, min_ts)
+        .await
+}
+
+#[inline]
+pub async fn len() -> usize {
+    CLIENT.len().await
+}
+
+#[inline]
+pub async fn is_empty() -> bool {
+    CLIENT.is_empty().await
+}
+
+#[inline]
+pub async fn clear() -> Result<()> {
+    CLIENT.clear().await
+}
+
+#[inline]
+pub async fn add_job(
+    org_id: &str,
+    stream_type: StreamType,
+    stream: &str,
+    offset: i64,
+) -> Result<i64> {
+    CLIENT.add_job(org_id, stream_type, stream, offset).await
+}
+
+#[inline]
+pub async fn get_pending_jobs(
+    node: &str,
+    limit: i64,
+    fast_mode: bool,
+) -> Result<Vec<MergeJobRecord>> {
+    CLIENT.get_pending_jobs(node, limit, fast_mode).await
+}
+
+#[inline]
+pub async fn get_pending_jobs_count() -> Result<stdHashMap<String, stdHashMap<String, i64>>> {
+    CLIENT.get_pending_jobs_count().await
+}
+
+#[inline]
+pub async fn set_job_pending(ids: &[i64], offsets: i64, stream: Option<&str>) -> Result<u64> {
+    CLIENT.set_job_pending(ids, offsets, stream).await
+}
+
+#[inline]
+pub async fn set_job_done(ids: &[i64]) -> Result<()> {
+    CLIENT.set_job_done(ids).await
+}
+
+#[inline]
+pub async fn update_running_jobs(ids: &[i64]) -> Result<()> {
+    CLIENT.update_running_jobs(ids).await
+}
+
+#[inline]
+pub async fn check_running_jobs(before_date: i64) -> Result<()> {
+    CLIENT.check_running_jobs(before_date).await
+}
+
+#[inline]
+pub async fn clean_done_jobs(before_date: i64) -> Result<()> {
+    CLIENT.clean_done_jobs(before_date).await
+}
+
+#[inline]
+pub async fn get_pending_dump_jobs(node: &str, limit: i64) -> Result<Vec<(i64, String, i64)>> {
+    CLIENT.get_pending_dump_jobs(node, limit).await
+}
+
+#[inline]
+pub async fn set_job_dumped_status(ids: &[i64], dumped: bool) -> Result<()> {
+    CLIENT.set_job_dumped_status(ids, dumped).await
+}
+
+#[inline]
+pub async fn insert_dump_stats(file: &str, stats: &StreamStats) -> Result<()> {
+    CLIENT.insert_dump_stats(file, stats).await
+}
+
+#[inline]
+pub async fn delete_dump_stats(file: &str) -> Result<()> {
+    CLIENT.delete_dump_stats(file).await
+}
+
+#[inline]
+pub async fn query_dump_stats_by_date_range(
+    org_id: &str,
+    stream_type: StreamType,
+    stream_name: &str,
+    date_range: (String, String),
+) -> Result<StreamStats> {
+    CLIENT
+        .query_dump_stats_by_date_range(org_id, stream_type, stream_name, date_range)
+        .await
+}
+
+#[inline]
+pub async fn org_stats_by_account(org_id: &str, account: &str) -> Result<(i64, i64)> {
+    CLIENT.org_stats_by_account(org_id, account).await
+}
+
+pub async fn local_cache_gc() -> Result<()> {
+    tokio::task::spawn(async move {
+        let cfg = get_config();
+        if cfg.common.local_mode {
+            return;
+        }
+
+        // gc every hour
+        loop {
+            if let Ok(min_update_at) = get_min_update_at().await
+                && min_update_at > 0
+            {
+                match LOCAL_CACHE.clean_by_min_update_at(min_update_at).await {
+                    Ok(_) => log::info!("[file_list] local cache gc done"),
+                    Err(e) => log::error!("[file_list] local cache gc failed: {e}"),
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+        }
+    });
+
+    Ok(())
+}
+
+#[inline]
+fn validate_time_range(time_range: (i64, i64)) -> Result<()> {
+    let (start, end) = time_range;
+    if start > end || start == 0 || end == 0 {
+        return Err(Error::Message("[file_list] invalid time range".to_string()));
+    }
+    Ok(())
+}
+
+pub fn calculate_max_ts_upper_bound(time_end: i64, stream_type: StreamType) -> i64 {
+    let cfg = get_config();
+    let level = match stream_type {
+        StreamType::Logs => PartitionTimeLevel::from(cfg.limit.logs_query_retention.as_str()),
+        StreamType::Traces => PartitionTimeLevel::from(cfg.limit.traces_query_retention.as_str()),
+        StreamType::Metrics => PartitionTimeLevel::from(cfg.limit.metrics_query_retention.as_str()),
+        _ => PartitionTimeLevel::Hourly,
+    };
+    let ts = level.duration();
+    if ts > 0 {
+        time_end + second_micros(ts)
+    } else {
+        time_end + second_micros(PartitionTimeLevel::Hourly.duration())
+    }
+}
+
+pub fn parse_stream_key(key: &str) -> Option<(String, StreamType, String)> {
+    let parts = key.split('/').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return None;
+    }
+    let org_id = parts[0].to_string();
+    let stream_type = parts[1].into();
+    let stream_name = parts[2].to_string();
+    Some((org_id, stream_type, stream_name))
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct FileRecord {
+    #[sqlx(default)]
+    pub id: i64,
+    #[sqlx(default)]
+    pub account: String,
+    #[sqlx(default)]
+    pub org: String,
+    #[sqlx(default)]
+    pub stream: String,
+    pub date: String,
+    pub file: String,
+    #[sqlx(default)]
+    pub deleted: bool,
+    #[sqlx(default)]
+    pub min_ts: i64,
+    #[sqlx(default)]
+    pub max_ts: i64,
+    #[sqlx(default)]
+    pub records: i64,
+    #[sqlx(default)]
+    pub original_size: i64,
+    #[sqlx(default)]
+    pub compressed_size: i64,
+    #[sqlx(default)]
+    pub index_size: i64,
+    #[sqlx(default)]
+    pub bloom_ver: i64,
+    #[sqlx(default)]
+    pub flattened: bool,
+    #[sqlx(default)]
+    pub updated_at: i64,
+}
+
+impl From<&FileRecord> for FileKey {
+    fn from(r: &FileRecord) -> Self {
+        Self {
+            id: r.id,
+            account: r.account.to_string(),
+            key: "files/".to_string() + &r.stream + "/" + &r.date + "/" + &r.file,
+            meta: r.into(),
+            deleted: r.deleted,
+            selection: None,
+            row_group_size: None,
+        }
+    }
+}
+
+impl From<&FileRecord> for FileMeta {
+    fn from(r: &FileRecord) -> Self {
+        Self {
+            min_ts: r.min_ts,
+            max_ts: r.max_ts,
+            records: r.records,
+            original_size: r.original_size,
+            compressed_size: r.compressed_size,
+            index_size: r.index_size,
+            bloom_ver: r.bloom_ver,
+            flattened: r.flattened,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct StatsRecord {
+    #[sqlx(default)]
+    pub stream: String,
+    pub file_num: i64,
+    pub min_ts: Option<i64>,
+    pub max_ts: i64,
+    pub records: i64,
+    pub original_size: i64,
+    pub compressed_size: i64,
+    pub index_size: i64,
+}
+
+impl From<&StatsRecord> for StreamStats {
+    fn from(record: &StatsRecord) -> Self {
+        Self {
+            created_at: 0,
+            doc_time_min: record.min_ts.unwrap_or_default(),
+            doc_time_max: record.max_ts,
+            doc_num: record.records,
+            file_num: record.file_num,
+            storage_size: record.original_size as f64,
+            compressed_size: record.compressed_size as f64,
+            index_size: record.index_size as f64,
+        }
+    }
+}
+
+impl From<StatsRecord> for StreamStats {
+    fn from(record: StatsRecord) -> Self {
+        (&record).into()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct FileDeletedRecord {
+    #[sqlx(default)]
+    pub id: i64,
+    #[sqlx(default)]
+    pub account: String,
+    pub stream: String,
+    pub date: String,
+    pub file: String,
+    pub index_file: bool,
+    pub flattened: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct MergeJobRecord {
+    pub id: i64,
+    pub stream: String, // default/logs/default
+    pub offsets: i64,   // 1718603746000000
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct MergeJobPendingRecord {
+    pub id: i64,
+    pub stream: String,
+    pub num: i64,
+}
+
+#[derive(Debug, Clone, sqlx::Type, PartialEq, Default)]
+#[repr(i64)]
+pub enum FileListJobStatus {
+    #[default]
+    Pending,
+    Running,
+    Done,
+}
+
+impl From<i64> for FileListJobStatus {
+    fn from(status: i64) -> Self {
+        match status {
+            0 => Self::Pending,
+            1 => Self::Running,
+            2 => Self::Done,
+            _ => Self::Pending,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, sqlx::FromRow)]
+pub struct FileId {
+    pub id: i64,
+    pub records: i64,
+    pub original_size: i64,
+    #[sqlx(default)]
+    pub deleted: bool,
+}
+
+#[derive(Clone, Debug, Default, sqlx::FromRow)]
+pub struct FileIdWithFile {
+    pub id: i64,
+    pub file: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use config::meta::stream::{StreamStats, StreamType};
+
+    use super::*;
+
+    // ── parse_stream_key ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_stream_key_valid_logs() {
+        let result = parse_stream_key("myorg/logs/mystream");
+        assert!(result.is_some());
+        let (org, stype, stream) = result.unwrap();
+        assert_eq!(org, "myorg");
+        assert_eq!(stype, StreamType::Logs);
+        assert_eq!(stream, "mystream");
+    }
+
+    #[test]
+    fn test_parse_stream_key_valid_metrics() {
+        let result = parse_stream_key("default/metrics/cpu_usage");
+        assert!(result.is_some());
+        let (org, stype, stream) = result.unwrap();
+        assert_eq!(org, "default");
+        assert_eq!(stype, StreamType::Metrics);
+        assert_eq!(stream, "cpu_usage");
+    }
+
+    #[test]
+    fn test_parse_stream_key_valid_traces() {
+        let result = parse_stream_key("acme/traces/http_spans");
+        assert!(result.is_some());
+        let (org, stype, stream) = result.unwrap();
+        assert_eq!(org, "acme");
+        assert_eq!(stype, StreamType::Traces);
+        assert_eq!(stream, "http_spans");
+    }
+
+    #[test]
+    fn test_parse_stream_key_too_few_parts() {
+        assert!(parse_stream_key("myorg/logs").is_none());
+        assert!(parse_stream_key("myorg").is_none());
+        assert!(parse_stream_key("").is_none());
+    }
+
+    #[test]
+    fn test_parse_stream_key_too_many_parts() {
+        // More than 3 segments → None
+        assert!(parse_stream_key("org/logs/stream/extra").is_none());
+    }
+
+    // ── FileListJobStatus::from(i64) ──────────────────────────────────────────
+
+    #[test]
+    fn test_file_list_job_status_from_i64() {
+        assert_eq!(FileListJobStatus::from(0), FileListJobStatus::Pending);
+        assert_eq!(FileListJobStatus::from(1), FileListJobStatus::Running);
+        assert_eq!(FileListJobStatus::from(2), FileListJobStatus::Done);
+        // Unknown values fall back to Pending
+        assert_eq!(FileListJobStatus::from(99), FileListJobStatus::Pending);
+        assert_eq!(FileListJobStatus::from(-1), FileListJobStatus::Pending);
+    }
+
+    #[test]
+    fn test_file_list_job_status_default() {
+        assert_eq!(FileListJobStatus::default(), FileListJobStatus::Pending);
+    }
+
+    // ── From<&FileRecord> for FileMeta ────────────────────────────────────────
+
+    #[test]
+    fn test_file_meta_from_file_record() {
+        let record = FileRecord {
+            id: 1,
+            account: "acc".to_string(),
+            org: "org1".to_string(),
+            stream: "default/logs/test".to_string(),
+            date: "2024-01-01".to_string(),
+            file: "file1.parquet".to_string(),
+            deleted: false,
+            min_ts: 1000,
+            max_ts: 2000,
+            records: 500,
+            original_size: 102400,
+            compressed_size: 51200,
+            index_size: 1024,
+            bloom_ver: 0,
+            flattened: true,
+            updated_at: 9999,
+        };
+
+        let meta = FileMeta::from(&record);
+        assert_eq!(meta.min_ts, 1000);
+        assert_eq!(meta.max_ts, 2000);
+        assert_eq!(meta.records, 500);
+        assert_eq!(meta.original_size, 102400);
+        assert_eq!(meta.compressed_size, 51200);
+        assert_eq!(meta.index_size, 1024);
+        assert!(meta.flattened);
+    }
+
+    // ── From<&FileRecord> for FileKey ────────────────────────────────────────
+
+    #[test]
+    fn test_file_key_from_file_record() {
+        let record = FileRecord {
+            id: 42,
+            account: "myaccount".to_string(),
+            org: "org1".to_string(),
+            stream: "default/logs/nginx".to_string(),
+            date: "2024-01-15".to_string(),
+            file: "chunk001.parquet".to_string(),
+            deleted: false,
+            min_ts: 100,
+            max_ts: 200,
+            records: 10,
+            original_size: 4096,
+            compressed_size: 2048,
+            index_size: 0,
+            bloom_ver: 0,
+            flattened: false,
+            updated_at: 0,
+        };
+
+        let key = FileKey::from(&record);
+        assert_eq!(key.id, 42);
+        assert_eq!(key.account, "myaccount");
+        assert_eq!(
+            key.key,
+            "files/default/logs/nginx/2024-01-15/chunk001.parquet"
+        );
+        assert!(!key.deleted);
+        assert!(key.selection.is_none());
+        assert_eq!(key.meta.min_ts, 100);
+        assert_eq!(key.meta.max_ts, 200);
+    }
+
+    // ── bloom_ver coverage on FileRecord ─────────────────────────────────────
+
+    #[test]
+    fn test_file_meta_from_file_record_carries_bloom_ver() {
+        let record = FileRecord {
+            id: 1,
+            account: "a".to_string(),
+            org: "o".to_string(),
+            stream: "s/logs/x".to_string(),
+            date: "2026/05/08/00".to_string(),
+            file: "f.parquet".to_string(),
+            deleted: false,
+            min_ts: 1,
+            max_ts: 2,
+            records: 3,
+            original_size: 4,
+            compressed_size: 5,
+            index_size: 6,
+            bloom_ver: 1_715_000_000_000_000,
+            flattened: false,
+            updated_at: 0,
+        };
+        let meta = FileMeta::from(&record);
+        assert_eq!(meta.bloom_ver, record.bloom_ver);
+    }
+
+    #[test]
+    fn test_file_record_bloom_ver_default_is_zero() {
+        // sqlx::FromRow with #[sqlx(default)] should fall back to 0 for missing column.
+        let record = FileRecord {
+            id: 0,
+            account: String::new(),
+            org: String::new(),
+            stream: String::new(),
+            date: String::new(),
+            file: String::new(),
+            deleted: false,
+            min_ts: 0,
+            max_ts: 0,
+            records: 0,
+            original_size: 0,
+            compressed_size: 0,
+            index_size: 0,
+            bloom_ver: 0,
+            flattened: false,
+            updated_at: 0,
+        };
+        // Conversion yields meta.bloom_ver == 0 too, which is the "no .bf" sentinel
+        // that downstream search code uses to fall back to the original tantivy path.
+        let meta = FileMeta::from(&record);
+        assert_eq!(meta.bloom_ver, 0);
+    }
+
+    // ── From<&StatsRecord> for StreamStats ───────────────────────────────────
+
+    #[test]
+    fn test_stream_stats_from_stats_record() {
+        let record = StatsRecord {
+            stream: "default/logs/test".to_string(),
+            file_num: 10,
+            min_ts: Some(1000),
+            max_ts: 9000,
+            records: 5000,
+            original_size: 1_048_576,
+            compressed_size: 524_288,
+            index_size: 8192,
+        };
+
+        let stats = StreamStats::from(&record);
+        assert_eq!(stats.doc_time_min, 1000);
+        assert_eq!(stats.doc_time_max, 9000);
+        assert_eq!(stats.doc_num, 5000);
+        assert_eq!(stats.file_num, 10);
+        assert_eq!(stats.storage_size, 1_048_576.0);
+        assert_eq!(stats.compressed_size, 524_288.0);
+        assert_eq!(stats.index_size, 8192.0);
+        assert_eq!(stats.created_at, 0); // always zero from record conversion
+    }
+
+    #[test]
+    fn test_stream_stats_from_stats_record_min_ts_none() {
+        let record = StatsRecord {
+            stream: "org/metrics/cpu".to_string(),
+            file_num: 1,
+            min_ts: None,
+            max_ts: 5000,
+            records: 100,
+            original_size: 256,
+            compressed_size: 128,
+            index_size: 0,
+        };
+
+        let stats = StreamStats::from(&record);
+        assert_eq!(stats.doc_time_min, 0); // None → default (0)
+        assert_eq!(stats.doc_time_max, 5000);
+    }
+
+    #[test]
+    fn test_stream_stats_from_stats_record_owned() {
+        let record = StatsRecord {
+            stream: "org/logs/app".to_string(),
+            file_num: 3,
+            min_ts: Some(111),
+            max_ts: 999,
+            records: 300,
+            original_size: 512,
+            compressed_size: 256,
+            index_size: 64,
+        };
+
+        // owned conversion should produce the same result as ref conversion
+        let stats_owned = StreamStats::from(record.clone());
+        let stats_ref = StreamStats::from(&record);
+        assert_eq!(stats_owned.doc_time_min, stats_ref.doc_time_min);
+        assert_eq!(stats_owned.doc_num, stats_ref.doc_num);
+        assert_eq!(stats_owned.file_num, stats_ref.file_num);
+    }
+}

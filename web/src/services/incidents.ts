@@ -1,0 +1,301 @@
+// Copyright 2026 OpenObserve Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import http from "./http";
+import serviceStreamsApi, {
+  type CorrelationRequest,
+  type CorrelationResponse,
+  type StreamInfo,
+} from "./service_streams";
+import { filterDimensionsForCorrelation } from "@/utils/telemetryCorrelation";
+import { loadIdentityConfig, clearIdentityConfigCache, clearAllIdentityConfigCache } from "@/utils/identityConfig";
+
+// Types matching backend API responses
+export interface Incident {
+  id: string;
+  org_id: string;
+  status: "open" | "acknowledged" | "resolved";
+  severity: "P1" | "P2" | "P3" | "P4";
+  group_values?: Record<string, string>;
+  key_type?: "Primary" | "Secondary" | "AlertId";
+  topology_context?: IncidentTopology;
+  first_alert_at: number;
+  last_alert_at: number;
+  resolved_at?: number;
+  alert_count: number;
+  title?: string;
+  assigned_to?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface IncidentTopology {
+  nodes: AlertNode[];
+  edges: AlertEdge[];
+  related_incident_ids: string[];
+  suggested_root_cause?: string;
+}
+
+export interface AlertNode {
+  alert_id: string;
+  alert_name: string;
+  service_name: string;
+  alert_count: number;
+  first_fired_at: number;
+  last_fired_at: number;
+}
+
+export interface AlertEdge {
+  from_node_index: number;
+  to_node_index: number;
+  edge_type: "temporal" | "service_dependency";
+}
+
+export interface IncidentAlert {
+  incident_id: string;
+  alert_id: string;
+  alert_name: string;
+  alert_fired_at: number;
+  correlation_reason: "service_discovery" | "primary_match" | "secondary_match" | "alert_id";
+  created_at: number;
+}
+
+export interface IncidentWithAlerts extends Incident {
+  alerts: IncidentAlert[];
+}
+
+export interface UpdateSeverityResponse extends Incident {
+  analysis_in_flight: boolean;
+}
+
+export interface ListIncidentsResponse {
+  incidents: Incident[];
+  total: number;
+}
+
+export interface IncidentStats {
+  total_incidents: number;
+  open_incidents: number;
+  acknowledged_incidents: number;
+  resolved_incidents: number;
+  by_severity: Record<string, number>;
+  by_service: Record<string, number>;
+  mttr_minutes?: number;
+  alerts_per_incident_avg: number;
+}
+
+// Telemetry correlation types
+export interface IncidentCorrelatedStreams {
+  serviceName: string;
+  matchedDimensions: Record<string, string>;
+  additionalDimensions: Record<string, string>;
+  logStreams: StreamInfo[];
+  metricStreams: StreamInfo[];
+  traceStreams: StreamInfo[];
+  correlationData: CorrelationResponse | null;
+}
+
+
+const incidents = {
+  /**
+   * List incidents with optional filtering and pagination
+   */
+  list: (
+    org_identifier: string,
+    status?: string,
+    limit: number = 50,
+    offset: number = 0,
+    keyword?: string
+  ) => {
+    let url = `/api/v2/${org_identifier}/alerts/incidents?limit=${limit}&offset=${offset}`;
+    if (status) {
+      url += `&status=${status}`;
+    }
+    if (keyword) {
+      url += `&keyword=${encodeURIComponent(keyword)}`;
+    }
+    return http().get<ListIncidentsResponse>(url);
+  },
+
+  /**
+   * Get incident details with all correlated alerts
+   */
+  get: (org_identifier: string, incident_id: string) => {
+    return http().get<IncidentWithAlerts>(
+      `/api/v2/${org_identifier}/alerts/incidents/${incident_id}`
+    );
+  },
+
+  /**
+   * Update incident status (open, acknowledged, resolved)
+   */
+  updateStatus: (
+    org_identifier: string,
+    incident_id: string,
+    status: "open" | "acknowledged" | "resolved"
+  ) => {
+    return http().patch<Incident>(
+      `/api/v2/${org_identifier}/alerts/incidents/${incident_id}/update`,
+      { status }
+    );
+  },
+
+  /**
+   * Update incident details (title, severity, etc.)
+   */
+  updateIncident: (
+    org_identifier: string,
+    incident_id: string,
+    updates: { title?: string; severity?: string }
+  ) => {
+    return http().patch<Incident | UpdateSeverityResponse>(
+      `/api/v2/${org_identifier}/alerts/incidents/${incident_id}/update`,
+      updates
+    );
+  },
+
+  /**
+   * Get incident statistics
+   */
+  getStats: (org_identifier: string) => {
+    return http().get<IncidentStats>(
+      `/api/v2/${org_identifier}/alerts/incidents/stats`
+    );
+  },
+
+  /**
+   * Trigger RCA analysis and return the complete result
+   */
+  triggerRca: (
+    org_identifier: string,
+    incident_id: string,
+    params: { reanalysis?: boolean } = {}
+  ) => {
+    return http().post<{ rca_content: string }>(
+      `/api/v2/${org_identifier}/alerts/incidents/${incident_id}/rca`,
+      null,
+      { params }
+    );
+  },
+
+  /**
+   * Get correlated telemetry streams for an incident
+   *
+   * Uses the incident's group_values to find related logs, metrics, and traces
+   * via the service correlation API. Now filters dimensions to only include
+   * fields that are actually used for disambiguation.
+   *
+   * @param org_identifier Organization ID
+   * @param incident The incident with group_values
+   * @returns Correlated streams grouped by type
+   */
+  getCorrelatedStreams: async (
+    org_identifier: string,
+    incident: Incident
+  ): Promise<IncidentCorrelatedStreams> => {
+    const allDimensions = incident.group_values ?? {};
+
+    // Load identity config to filter dimensions (with caching)
+    let filteredDimensions = allDimensions;
+    try {
+      const identityConfig = await loadIdentityConfig(org_identifier);
+
+      // Filter dimensions to only include disambiguation fields
+      filteredDimensions = filterDimensionsForCorrelation(allDimensions, identityConfig);
+
+      console.log("[incidents] Dimension filtering for incident correlation:", {
+        incident_id: incident.id,
+        original_count: Object.keys(allDimensions).length,
+        filtered_count: Object.keys(filteredDimensions).length,
+        original: allDimensions,
+        filtered: filteredDimensions
+      });
+    } catch (err) {
+      console.warn("[incidents] Failed to load identity config for dimension filtering, using all dimensions:", err);
+    }
+
+    const request: CorrelationRequest = {
+      source_stream:
+        // filteredDimensions only contains "service" key if present (not variations)
+        filteredDimensions.service ||
+        // Fallback to original dimensions for service name variations
+        allDimensions.serviceName ||
+        allDimensions["service.name"] ||
+        allDimensions["service_name"] ||
+        "default",
+      source_type: "logs",
+      available_dimensions: filteredDimensions,
+    };
+
+    const response = await serviceStreamsApi.correlate(org_identifier, request);
+    const correlationData = response.data;
+
+    // Handle null response when no service is found
+    if (!correlationData) {
+      return {
+        serviceName: "Unknown Service",
+        matchedDimensions: {},
+        additionalDimensions: allDimensions,
+        logStreams: [],
+        metricStreams: [],
+        traceStreams: [],
+        correlationData: null,
+      };
+    }
+
+    return {
+      serviceName: correlationData.service_name,
+      matchedDimensions: correlationData.matched_dimensions || {},
+      additionalDimensions: correlationData.additional_dimensions || {},
+      logStreams: correlationData.related_streams.logs || [],
+      metricStreams: correlationData.related_streams.metrics || [],
+      traceStreams: correlationData.related_streams.traces || [],
+      correlationData,
+    };
+  },
+
+  /**
+   * Get event timeline for an incident
+   */
+  getEvents: (org_identifier: string, incident_id: string) => {
+    return http().get(
+      `/api/v2/${org_identifier}/alerts/incidents/${incident_id}/events`
+    );
+  },
+
+  /**
+   * Post a comment on an incident
+   */
+  postComment: (org_identifier: string, incident_id: string, comment: string) => {
+    return http().post(
+      `/api/v2/${org_identifier}/alerts/incidents/${incident_id}/events/comment`,
+      { comment }
+    );
+  },
+
+  /**
+   * Clear identity config cache for a specific organization
+   * Call this when identity config settings are updated
+   */
+  clearIdentityConfigCache,
+
+  /**
+   * Clear all identity config caches
+   * Use when switching organizations or on logout
+   */
+  clearAllIdentityConfigCaches: clearAllIdentityConfigCache,
+};
+
+export default incidents;

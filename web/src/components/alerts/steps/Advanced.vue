@@ -1,0 +1,442 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <div
+    class="step-advanced"
+    :class="store.state.theme === 'dark' ? 'dark-mode' : 'light-mode'"
+  >
+    <div class="step-content card-container">
+      <!-- Section header -->
+      <div class="section-header">
+        <div class="section-header-accent" />
+        <span class="section-header-title">{{
+          t("alerts.additional_settings") || "Additional Settings"
+        }}</span>
+      </div>
+
+      <div class="tw:px-3 tw:py-3 tw:flex tw:flex-col tw:gap-4">
+        <!-- Template Override -->
+        <div>
+          <div class="subsection-label tw:mb-2">
+            <span>{{ t("alerts.template") }}</span>
+            <OButton
+              style="color: #a0a0a0"
+              variant="ghost"
+              size="icon-sm"
+            >
+              <OIcon name="info-outline" size="sm" />
+              <OTooltip :content="t('alerts.alertSettings.templateTooltip')" />
+            </OButton>
+          </div>
+          <div class="tw:flex tw:items-center tw:gap-2">
+            <OSelect
+              v-model="localTemplate"
+              :options="formattedTemplates"
+              clearable
+              :placeholder="t('alerts.advanced.selectTemplate')"
+              class="tw:min-w-[240px] tw:max-w-[300px]"
+              data-test="advanced-template-override-select"
+              @update:model-value="emitTemplateUpdate"
+            >
+              <template #empty>{{ t("alerts.advanced.noTemplatesAvailable") }}</template>
+            </OSelect>
+            <OButton
+              variant="ghost"
+              size="icon-circle-sm"
+              :title="t('alerts.advanced.refreshTemplates')"
+              @click="$emit('refresh:templates')"
+            >
+              <OIcon name="refresh" size="sm" />
+            </OButton>
+          </div>
+        </div>
+
+        <!-- Context Variables -->
+        <div>
+          <div class="subsection-label tw:mb-2">
+            <span>{{ t("alerts.additionalVariables") }}</span>
+            <OButton
+              style="color: #a0a0a0"
+              variant="ghost"
+              size="icon-sm"
+            >
+              <OIcon name="info-outline" size="sm" />
+              <OTooltip :content="t('alerts.advanced.variablesTooltip')" />
+            </OButton>
+          </div>
+          <template v-if="!localVariables.length">
+            <OButton
+              data-test="alert-variables-add-btn"
+              variant="outline"
+              size="sm"
+              @click="addVariable"
+            >
+              <span>{{ t("alerts.advanced.addVariable") }}</span>
+            </OButton>
+          </template>
+          <template v-else>
+            <div
+              v-for="(variable, index) in localVariables"
+              :key="variable.id"
+              class="tw:flex tw:items-center tw:gap-2 tw:mb-2"
+              :data-test="`alert-variables-${index + 1}`"
+            >
+              <OInput
+                data-test="alert-variables-key-input"
+                v-model="variable.key"
+                :placeholder="t('common.name')"
+                class="tw:min-w-[140px]"
+                @update:model-value="emitUpdate"
+              />
+              <OInput
+                data-test="alert-variables-value-input"
+                v-model="variable.value"
+                :placeholder="t('common.value')"
+                class="tw:min-w-[200px]"
+                @update:model-value="emitUpdate"
+              />
+              <OButton
+                data-test="alert-variables-delete-variable-btn"
+                variant="ghost"
+                size="icon-circle-sm"
+                @click="removeVariable(variable)"
+              >
+                <OIcon name="delete-outline" size="sm" />
+              </OButton>
+              <OButton
+                data-test="alert-variables-add-variable-btn"
+                v-if="index === localVariables.length - 1"
+                variant="ghost"
+                size="icon-circle-sm"
+                @click="addVariable"
+              >
+                <OIcon name="add" size="sm" />
+              </OButton>
+            </div>
+          </template>
+        </div>
+
+        <!-- Description -->
+        <div>
+          <div class="subsection-label tw:mb-2">
+            <span>{{ t("alerts.description") }}</span>
+          </div>
+          <OTextarea
+            v-model="localDescription"
+            :placeholder="t('alerts.placeholders.typeSomething')"
+            :rows="4"
+            @update:model-value="emitUpdate"
+          />
+        </div>
+
+        <!-- Row Template -->
+        <div>
+          <div class="tw:flex tw:items-center tw:justify-between tw:mb-2">
+            <div class="subsection-label">
+              <span>{{ t("alerts.row") }}</span>
+              <OButton
+                data-test="add-alert-row-input-info-btn"
+                style="color: #a0a0a0"
+                variant="ghost"
+                size="icon-sm"
+              >
+                <OIcon name="info-outline" size="sm" />
+                <OTooltip :content="t('alerts.advanced.rowTemplateTooltip')" />
+              </OButton>
+            </div>
+            <div class="tw:flex tw:items-center tw:gap-2">
+              <span class="tw:text-xs tw:opacity-60">{{
+                t("alerts.advanced.templateType")
+              }}</span>
+              <OToggleGroup
+                data-test="add-alert-row-template-type-toggle"
+                v-model="localRowTemplateType"
+                @update:model-value="emitUpdate"
+              >
+                <OToggleGroupItem value="String" size="sm">
+                  <template #icon-left><OIcon name="title" size="sm" /></template>
+                  String
+                </OToggleGroupItem>
+                <OToggleGroupItem value="Json" size="sm">
+                  <template #icon-left><OIcon name="data-object" size="sm" /></template>
+                  JSON
+                </OToggleGroupItem>
+              </OToggleGroup>
+            </div>
+          </div>
+          <OTextarea
+            data-test="add-alert-row-input-textarea"
+            v-model="localRowTemplate"
+            :placeholder="rowTemplatePlaceholder"
+            :rows="4"
+            @update:model-value="emitUpdate"
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script lang="ts">
+import {
+  defineComponent,
+  ref,
+  computed,
+  watch,
+  type PropType,
+} from "vue";
+import { useI18n } from "vue-i18n";
+import { useStore } from "vuex";
+import { getUUID } from "@/utils/zincutils";
+import OToggleGroup from "@/lib/core/ToggleGroup/OToggleGroup.vue";
+import OToggleGroupItem from "@/lib/core/ToggleGroup/OToggleGroupItem.vue";
+import OButton from "@/lib/core/Button/OButton.vue";
+import OInput from "@/lib/forms/Input/OInput.vue";
+import OTextarea from "@/lib/forms/Input/OTextarea.vue";
+import OSelect from "@/lib/forms/Select/OSelect.vue";
+import OTooltip from "@/lib/overlay/Tooltip/OTooltip.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+
+export interface Variable {
+  id: string;
+  key: string;
+  value: string;
+}
+
+export default defineComponent({
+  name: "Step6Advanced",
+  components: { OToggleGroup, OToggleGroupItem, OButton, OIcon, OInput, OTextarea, OSelect, OTooltip },
+  props: {
+    template: {
+      type: String,
+      default: "",
+    },
+    templates: {
+      type: Array as PropType<any[]>,
+      default: () => [],
+    },
+    contextAttributes: {
+      type: Array as PropType<Variable[]>,
+      default: () => [],
+    },
+    description: {
+      type: String,
+      default: "",
+    },
+    rowTemplate: {
+      type: String,
+      default: "",
+    },
+    rowTemplateType: {
+      type: String,
+      default: "String",
+    },
+  },
+  emits: [
+    "update:template",
+    "refresh:templates",
+    "update:contextAttributes",
+    "update:description",
+    "update:rowTemplate",
+    "update:rowTemplateType",
+  ],
+  setup(props, { emit }) {
+    const { t } = useI18n();
+    const store = useStore();
+
+    // Template override
+    const localTemplate = ref<string | undefined>(props.template || undefined);
+    const formattedTemplates = computed(() =>
+      props.templates.map((t: any) => t.name),
+    );
+    const emitTemplateUpdate = () => {
+      emit("update:template", localTemplate.value || "");
+    };
+
+    watch(
+      () => props.template,
+      (newVal) => {
+        localTemplate.value = newVal || undefined;
+      },
+    );
+    const localVariables = ref<Variable[]>([...props.contextAttributes]);
+    const localDescription = ref(props.description);
+    const localRowTemplate = ref(props.rowTemplate);
+    const localRowTemplateType = ref(props.rowTemplateType);
+
+    const rowTemplateTypeOptions = [
+      {
+        label: "String",
+        value: "String",
+      },
+      {
+        label: "JSON",
+        value: "Json",
+      },
+    ];
+
+    const rowTemplatePlaceholder = computed(() => {
+      return localRowTemplateType.value === "Json"
+        ? 'e.g - {"user": "{name}", "timestamp": "{timestamp}"}'
+        : "e.g - Alert was triggered at {timestamp}";
+    });
+
+    // Watch for prop changes
+    watch(
+      () => props.contextAttributes,
+      (newVal) => {
+        localVariables.value = [...newVal];
+      },
+      { deep: true },
+    );
+
+    watch(
+      () => props.description,
+      (newVal) => {
+        localDescription.value = newVal;
+      },
+    );
+
+    watch(
+      () => props.rowTemplate,
+      (newVal) => {
+        localRowTemplate.value = newVal;
+      },
+    );
+
+    watch(
+      () => props.rowTemplateType,
+      (newVal) => {
+        localRowTemplateType.value = newVal;
+      },
+    );
+
+    const addVariable = () => {
+      localVariables.value.push({
+        id: getUUID(),
+        key: "",
+        value: "",
+      });
+      emitUpdate();
+    };
+
+    const removeVariable = (variable: Variable) => {
+      localVariables.value = localVariables.value.filter(
+        (v: Variable) => v.id !== variable.id,
+      );
+      emitUpdate();
+    };
+
+    const emitUpdate = () => {
+      emit("update:contextAttributes", localVariables.value);
+      emit("update:description", localDescription.value);
+      emit("update:rowTemplate", localRowTemplate.value);
+      emit("update:rowTemplateType", localRowTemplateType.value);
+    };
+
+    return {
+      t,
+      store,
+      localTemplate,
+      formattedTemplates,
+      emitTemplateUpdate,
+      localVariables,
+      localDescription,
+      localRowTemplate,
+      localRowTemplateType,
+      rowTemplateTypeOptions,
+      rowTemplatePlaceholder,
+      addVariable,
+      removeVariable,
+      emitUpdate,
+    };
+  },
+});
+</script>
+
+<style scoped lang="scss">
+.step-advanced {
+  width: 100%;
+
+  .step-content {
+    border-radius: 8px;
+  }
+
+  &.dark-mode {
+    .step-content {
+      background-color: #212121;
+      border: 1px solid #343434;
+    }
+    .section-header {
+      border-bottom: 1px solid #343434;
+    }
+    .section-header-title {
+      color: #e0e0e0;
+    }
+    .section-header-accent {
+      background: var(--q-primary);
+    }
+    .subsection-label {
+      color: #9ca3af;
+    }
+  }
+
+  &.light-mode {
+    .step-content {
+      background-color: #ffffff;
+      border: 1px solid #e6e6e6;
+    }
+    .section-header {
+      border-bottom: 1px solid #eeeeee;
+    }
+    .section-header-title {
+      color: #374151;
+    }
+    .section-header-accent {
+      background: var(--q-primary);
+    }
+    .subsection-label {
+      color: #6b7280;
+    }
+  }
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+}
+.section-header-accent {
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.section-header-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.subsection-label {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+
+</style>

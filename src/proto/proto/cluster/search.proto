@@ -1,0 +1,215 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "org.openobserve.cluster";
+option java_outer_classname = "searchProto";
+
+package cluster;
+
+import "cluster/common.proto";
+
+service Search {
+    rpc QueryStatus(QueryStatusRequest) returns (QueryStatusResponse) {}
+    rpc CancelQuery(CancelQueryRequest) returns (CancelQueryResponse) {}
+    rpc ClusterCancelQuery(CancelQueryRequest) returns (CancelQueryResponse) {}
+    rpc Search(SearchRequest) returns (SearchResponse) {}
+    rpc SearchMulti(SearchRequest) returns (SearchResponse) {}
+    rpc SearchPartition(SearchPartitionRequest) returns (SearchPartitionResponse) {}
+    rpc GetResult(GetResultRequest) returns (GetResultResponse) {}
+    rpc DeleteResult(DeleteResultRequest) returns (DeleteResultResponse) {}
+    rpc GetTable(GetTableRequest) returns (GetTableResponse) {}
+    rpc GetSourcemapFile(GetSourcemapFileRequest) returns (GetSourcemapFileResponse) {}
+    // Slot-based admission RPCs
+    rpc TryAcquire(TryAcquireRequest) returns (TryAcquireResponse) {}
+    rpc StartQuery(StartQueryRequest) returns (StartQueryResponse) {}
+    rpc ReleaseQuery(ReleaseQueryRequest) returns (ReleaseQueryResponse) {}
+    rpc GetLicenseUsageInfo(GetLicenseUsageRequest) returns (GetLicenseUsageResponse) {}
+}
+
+message QueryStatusRequest {}
+
+message QueryStatusResponse {
+    repeated QueryStatus status = 1;
+}
+
+message CancelQueryRequest {
+    string trace_id = 1;
+}
+
+message CancelQueryResponse {
+    bool is_success = 1;
+}
+
+message SearchRequest {
+    string             trace_id = 1;
+    string               org_id = 2;
+    string          stream_type = 3;
+    optional string     user_id = 4;
+    bytes               request = 5;
+}
+
+message SearchResponse {
+    string             trace_id = 1;
+    bytes              response = 2;
+}
+
+message SearchPartitionRequest {
+    string             trace_id = 1;
+    string               org_id = 2;
+    string          stream_type = 3;
+    bytes               request = 5;
+    bool   skip_max_query_range = 6; 
+}
+
+message SearchPartitionResponse {
+    string             trace_id = 1;
+    bytes              response = 2;
+}
+
+message DeleteResultRequest {
+    repeated string paths = 1;
+}
+
+message DeleteResultResponse {}
+
+message GetResultRequest {
+    string           path = 1;
+}
+
+message GetResultResponse {
+    bytes        response = 1;
+}
+
+// Search request query
+message SearchQuery {
+    string                sql = 1;
+    bool           quick_mode = 3;
+    int32                from = 4;
+    int32                size = 5;
+    int64          start_time = 6;
+    int64            end_time = 7;
+    bool     track_total_hits = 9;
+    string        query_type = 10;
+    bool          uses_zo_fn = 12;
+    string          query_fn = 13;
+    bool            skip_wal = 14;
+    string         action_id = 15;
+    int64 histogram_interval = 16;
+    optional string timezone = 17;
+    // Simplified sampling: just specify ratio (0.0-1.0), backend uses optimal defaults
+    // Backend converts this to SamplingConfig for internal node communication
+    optional double sampling_ratio = 18;
+}
+
+// Sampling configuration for query performance optimization
+message SamplingConfig {
+    // Sampling ratio (0.0 to 1.0, e.g., 0.1 = 10% sample)
+    double sampling_ratio = 1;
+    // Sampling mode: "system" (row group level) or "bernoulli" (row level)
+    string sampling_mode = 2;
+    // Temporal strategy: "random" or "stratified"
+    string temporal_strategy = 3;
+    // Number of time buckets for stratified sampling (e.g., 24 for hourly over a day)
+    optional int32 num_time_strata = 4;
+}
+
+message SearchEventContext {
+    optional string alert_key = 1;
+    optional string derived_stream_key = 2;
+    optional string report_key = 3;
+    optional string dashboard_id = 4;
+    optional string dashboard_name = 5;
+    optional string dashboard_folder_id = 6;
+    optional string dashboard_folder_name = 7;
+    optional string alert_name = 8;
+}
+
+message QueryStatus {
+    string                trace_id = 1;
+    int64               created_at = 2;
+    int64               started_at = 3;
+    bool                  is_queue = 4;
+    optional string        user_id = 5;
+    optional string         org_id = 6;
+    optional string    stream_type = 7;
+    optional Query           query = 8;
+    optional ScanStats  scan_stats = 9;
+    reserved 10; // was WorkGroup enum (varint); now reserved to avoid rolling-upgrade wire-type clash
+    optional string   search_type = 11;
+    optional SearchEventContext search_event_context = 12;
+    optional string    work_group = 13;
+}
+
+message Query {
+    string       sql = 1;
+    int64 start_time = 2;
+    int64   end_time = 3;
+}
+
+message GetTableRequest {
+    string           path = 1;
+}
+
+message GetTableResponse {
+    bytes            data = 1;
+}
+
+message GetSourcemapFileRequest {
+    string          org_id = 1;
+    string   original_name = 2;
+    string            path = 3;
+}
+
+message GetSourcemapFileResponse {
+    bytes   file_data = 1;
+}
+
+// Slot-based admission messages
+message TryAcquireRequest {
+    string   trace_id = 1;
+    string work_group = 2; // "short" | "long" | "background"
+    uint64     ttl_ms = 3;
+}
+
+message TryAcquireResponse {
+    bool   success = 1;
+    string  reason = 2;
+}
+
+message StartQueryRequest {
+    string trace_id = 1;
+}
+
+message StartQueryResponse {
+    bool   success = 1;
+    string  reason = 2;
+}
+
+message ReleaseQueryRequest {
+    string trace_id = 1;
+}
+
+message ReleaseQueryResponse {
+    bool success = 1;
+}
+
+
+message GetLicenseUsageRequest {}
+
+
+message UsageResult{
+    string  ts = 1;
+    double   value = 2;
+}
+
+message GetLicenseUsageResponse {
+    bool                    search_allowed = 1;
+    double                  ingestion_used = 2;
+    uint32                  ingestion_limit_exceeded_count = 3;
+    bool                    last_reporting_successful = 4;
+    int64                   last_reporting_timestamp = 5;
+    uint32                  days_since_last_report = 6;
+    string                  last_usage_response = 7;
+    repeated UsageResult    ingestion_history = 8;
+
+}

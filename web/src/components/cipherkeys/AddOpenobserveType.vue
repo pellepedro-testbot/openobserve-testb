@@ -1,0 +1,115 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+<template>
+  <div>
+    <div v-if="!formData.isUpdate || isUpdate || formData.key.store.local === ''">
+      <OTextarea
+        data-test="add-cipher-key-openobserve-secret-input"
+        v-model="formData.key.store.local"
+        :label="t('cipherKey.secret') + ' *'"
+        class="tw:w-full tw:pb-1"
+        :error="(secretTouched || submitAttempted) && !formData.key.store.local"
+        :error-message="t('cipherKey.secretRequired')"
+        @update:model-value="secretTouched = true"
+        @blur="secretTouched = true"
+      />
+      <OButton data-test="add-cipher-key-openobserve-secret-input-cancel" variant="outline" size="sm-action" class="tw:mt-2" v-if="formData.isUpdate && formData.key.store.local != ''" @click="isUpdate = false">{{ t('common.cancel') }}</OButton>
+    </div>
+    <div v-else>
+      <label class="tw:flex q-field tw:mb-3">
+        <b>{{ t('cipherKey.secret') }}</b>
+      </label>
+      <pre class="pre-text">{{ formData.key.store.local }}</pre>
+      <OButton data-test="add-cipher-key-openobserve-secret-input-update" variant="primary" size="sm-action" @click="isUpdate = true">{{ t('common.update') }}</OButton>
+    </div>
+  </div>
+</template>
+
+<script lang="ts">
+import { ref, defineComponent } from "vue";
+import { useI18n } from "vue-i18n";
+import OButton from '@/lib/core/Button/OButton.vue';
+import OTextarea from '@/lib/forms/Input/OTextarea.vue';
+
+export default defineComponent({
+  name: "AddOpenobserveType",
+  components: { OButton, OTextarea },
+  props: {
+    formData: {
+      type: Object,
+      required: true,
+      default: () => ({
+        key: {
+          store: {
+            type: "local",
+            akeyless: {
+              base_url: "",
+              access_id: "",
+              auth: {
+                type: "access_key",
+                access_key: "",
+                ldap: {
+                  username: "",
+                  password: "",
+                },
+              },
+              store: {
+                type: "static_secret",
+                static_secret: "",
+                dfc: {
+                  name: "",
+                  iv: "",
+                  encrypted_data: "",
+                },
+              },
+            },
+            local: "",
+          },
+          mechanism: {
+            type: "simple",
+            simple_algorithm: "aes-256-siv",
+          },
+        },
+      }),
+    },
+    // Parent toggles this to true on Continue click. The Secret field's
+    // error displays when either this OR the local touched flag is true.
+    submitAttempted: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  setup(props) {
+    const { t } = useI18n();
+    const isUpdate = ref(false);
+    const secretTouched = ref(false);
+    return {
+      t,
+      isUpdate,
+      secretTouched,
+    };
+  },
+});
+</script>
+<style lang="scss" scoped>
+.pre-text {
+  text-wrap: auto;
+  word-wrap: break-word;
+  border: 1px solid #E1E1E1;
+  padding: 5px;
+  margin-bottom: 5px;
+}
+</style>

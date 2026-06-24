@@ -1,0 +1,255 @@
+import config from "@/aws-exports";
+import { routeGuard } from "@/utils/zincutils";
+
+const Settings = () => import("@/components/settings/index.vue");
+const TemplateList = () => import("@/components/alerts/TemplateList.vue");
+const AlertsDestinationList = () => import("@/components/alerts/AlertsDestinationList.vue");
+
+const useManagementRoutes = () => {
+  const routes: any = [
+    {
+      path: "settings",
+      name: "settings",
+      component: Settings,
+      meta: {
+        keepAlive: true,
+        title: "Settings",
+      },
+      beforeEnter(to: any, from: any, next: any) {
+        routeGuard(to, from, next);
+      },
+      children: [
+        {
+          path: "general",
+          name: "general",
+          meta: {
+            title: "General",
+          },
+          component: () => import("@/components/settings/General.vue"),
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "organization",
+          name: "organizationSettings",
+          meta:{
+            title: "Organization Parameters",
+          },
+          component: () =>
+            import("@/components/settings/OrganizationSettings.vue"),
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "alert_destinations",
+          name: "alertDestinations",
+          meta:{
+            title: "Alert Destinations",
+          },
+          component: AlertsDestinationList,
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "model_pricing",
+          name: "modelPricing",
+          meta: {
+            keepAlive: true,
+            title: "LLM Model Pricing",
+          },
+          component: () =>
+            import("@/components/settings/ModelPricingList.vue"),
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "model_pricing/edit",
+          name: "modelPricingEditor",
+          meta: {
+            title: "Model Pricing Editor",
+          },
+          component: () =>
+            import("@/components/settings/ModelPricingEditor.vue"),
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "templates",
+          name: "alertTemplates",
+          meta:{
+            title: "Templates",
+          },
+          component: TemplateList,
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+      ],
+    },
+  ];
+  // LLM Providers (used by the AI Observability / Online Evals flows) is an
+  // enterprise/cloud-only feature — not available in OSS builds.
+  if (config.isEnterprise == "true" || config.isCloud == "true") {
+    routes[0].children.push({
+      path: "llm_providers",
+      name: "llmProviders",
+      component: () =>
+        import("@/components/settings/LlmProvidersSettings.vue"),
+      meta: {
+        title: "LLM Providers",
+      },
+      beforeEnter(to: any, from: any, next: any) {
+        routeGuard(to, from, next);
+      },
+    });
+  }
+  if (config.isEnterprise == "true") {
+    routes[0].children.push(
+      ...[
+        {
+          path: "query_management",
+          name: "query_management",
+          component: () => import("@/components/queries/RunningQueries.vue"),
+          meta: {
+            keepAlive: true,
+            title: "Query Management",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "cipher_keys",
+          name: "cipherKeys",
+          component: () => import("@/components/settings/CipherKeys.vue"),
+          meta: {
+            keepAlive: true,
+            title: "Cipher Keys",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "ai_toolsets",
+          name: "aiToolsets",
+          component: () => import("@/components/settings/AiToolsets.vue"),
+          meta: {
+            keepAlive: true,
+            title: "AI Toolsets",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "pipeline_destinations",
+          name: "pipelineDestinations",
+          meta:{
+            title: "Pipeline Destinations",
+          },
+          component: () =>
+            import("@/components/alerts/PipelinesDestinationList.vue"),
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "storage_settings",
+          name: "storageSettings",
+          component: () =>
+            import("@/components/settings/OrgStorageSettings.vue"),
+          meta: {
+            title: "Storage Settings",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "nodes",
+          name: "nodes",
+          component: () => import("@/components/settings/Nodes.vue"),
+          meta: {
+            keepAlive: true,
+            title: "Nodes",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "domain_management",
+          name: "domainManagement",
+          component: () => import("@/components/settings/DomainManagement.vue"),
+          meta: {
+            keepAlive: true,
+            title: "Domain Management",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "regex_patterns",
+          name: "regexPatterns",
+          component: () => import("@/components/settings/RegexPatternList.vue"),
+          meta: {
+            keepAlive: true,
+            title: "Regex Patterns",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+
+        },
+        {
+          path: "correlation/:tab?",
+          name: "correlationSettings",
+          component: () => import("@/components/settings/CorrelationSettings.vue"),
+          meta: {
+            keepAlive: true,
+            title: "Correlation Settings",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+        {
+          path: "license",
+          name: "license",
+          component: () => import("@/components/settings/License.vue"),
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        },
+      ],
+    );
+  }
+  if (config.isCloud == "true") {
+    routes[0].children.push(
+      ...[
+        {
+          path: "organization_management",
+          name: "orgnizationManagement",
+          component: () => import("@/components/settings/OrganizationManagement.vue"),
+          meta: {
+            keepAlive: true,
+            title: "Organization Management",
+          },
+          beforeEnter(to: any, from: any, next: any) {
+            routeGuard(to, from, next);
+          },
+        }
+      ]
+    )
+  }
+  return routes;
+};
+
+export default useManagementRoutes;

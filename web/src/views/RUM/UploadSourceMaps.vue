@@ -1,0 +1,394 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <div class="upload-source-maps-page tw:w-full tw:h-full tw:px-[0.625rem]">
+    <!-- Top Header Bar -->
+    <div class="header-bar card-container tw:flex tw:items-center tw:justify-between tw:py-[0.675rem] tw:h-[64px] tw:px-[0.675rem] tw:mb-[0.675rem]">
+      <div class="tw:flex tw:items-center tw:gap-3">
+        <div
+          data-test="add-alert-back-btn"
+          class="tw:flex tw:justify-center tw:items-center tw:mr-3 tw:cursor-pointer"
+          style="
+            border: 1.5px solid;
+            border-radius: 50%;
+            width: 22px;
+            height: 22px; 
+          "
+          title="Go Back"
+          @click="navigateBack()"
+        >
+          <OIcon name="arrow-back-ios-new" size="xs" />
+        </div>
+        <div>
+          <div class="tw:text-xl tw:font-semibold text-weight-medium">Upload Source Maps</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Form Content Area -->
+    <div class="form-content-area card-container tw:mb-[0.675rem] tw:p-6" style="height: calc(100vh - 172px); overflow: auto">
+      <div class="upload-form">
+        <!-- Input Fields -->
+        <div class="tw:grid tw:grid-cols-1 md:tw:grid-cols-3 tw:gap-4 tw:mb-6">
+          <!-- Service Input -->
+          <div>
+            <div class="tw:text-sm tw:font-medium text-weight-medium tw:mb-2">Service *</div>
+            <OInput
+              data-test="rum-upload-source-maps-service-input"
+              v-model="formData.service"
+              placeholder="Enter service name"
+              :error="!!serviceError"
+              :error-message="serviceError"
+              @update:model-value="serviceError = ''"
+            />
+          </div>
+
+          <!-- Version Input -->
+          <div>
+            <div class="tw:text-sm tw:font-medium text-weight-medium tw:mb-2">Version *</div>
+            <OInput
+              data-test="rum-upload-source-maps-version-input"
+              v-model="formData.version"
+              placeholder="Enter version (e.g., 1.0.0)"
+              :error="!!versionError"
+              :error-message="versionError"
+              @update:model-value="versionError = ''"
+            />
+          </div>
+
+          <!-- Environment Input -->
+          <div>
+            <div class="tw:text-sm tw:font-medium text-weight-medium tw:mb-2">Environment</div>
+            <OInput
+              data-test="rum-upload-source-maps-environment-input"
+              v-model="formData.environment"
+              placeholder="Enter environment (optional)"
+            />
+          </div>
+        </div>
+
+        <!-- File Upload Area -->
+        <div class="tw:mb-6">
+          <div class="tw:text-sm tw:font-medium text-weight-medium tw:mb-2">Source Map ZIP File *</div>
+          <div
+            data-test="rum-upload-source-maps-file-dropzone"
+            class="upload-area"
+            :class="{ 'drag-over': isDragging, 'has-file': formData.file }"
+            @dragover.prevent="isDragging = true"
+            @dragleave.prevent="isDragging = false"
+            @drop.prevent="handleDrop"
+            @click="triggerFileInput"
+          >
+            <input
+              ref="fileInputRef"
+              data-test="rum-upload-source-maps-file-input"
+              type="file"
+              accept=".zip"
+              style="display: none"
+              @change="handleFileInput"
+            />
+
+            <div v-if="!formData.file" class="upload-content">
+              <OIcon name="backup" size="xl" class="tw:mb-3" />
+              <div class="tw:text-xl tw:font-semibold tw:text-gray-500 tw:mb-2">Drop your file here</div>
+              <div class="tw:text-sm tw:text-gray-400 tw:mb-3">or click to browse</div>
+              <div class="tw:text-xs tw:text-gray-400">.zip files only</div>
+            </div>
+
+            <div v-else class="file-info">
+              <div class="tw:flex tw:items-center tw:justify-between">
+                <div class="tw:flex tw:items-center tw:gap-3">
+                  <OIcon name="draft" size="lg" />
+                  <div>
+                    <div class="tw:text-sm tw:font-medium text-weight-medium">{{ formData.file.name }}</div>
+                    <div class="tw:text-xs tw:text-gray-400">{{ formatFileSize(formData.file.size) }}</div>
+                  </div>
+                </div>
+                <OButton
+                  variant="ghost"
+                  size="icon"
+                  icon-left="close"
+                  @click.stop="removeFile"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Action Bar -->
+    <div class="action-bar card-container tw:flex tw:items-center tw:justify-end tw:gap-3 tw:py-3 tw:pr-3"
+      style="position: sticky; z-index: 2">
+      <OButton
+        data-test="rum-upload-source-maps-cancel-btn"
+        variant="outline"
+        size="sm-action"
+        @click="navigateBack"
+        :disabled="isUploading"
+      >Cancel</OButton>
+      <OButton
+        data-test="rum-upload-source-maps-upload-btn"
+        variant="primary"
+        size="sm-action"
+        :loading="isUploading"
+        :disabled="isUploading"
+        @click="uploadSourceMaps"
+      >Upload</OButton>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from "vue";
+import { useStore } from "vuex";
+import { useRouter, useRoute } from "vue-router";
+import sourcemapsService from "@/services/sourcemaps";
+import OButton from "@/lib/core/Button/OButton.vue";
+import OInput from "@/lib/forms/Input/OInput.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+import { toast } from "@/lib/feedback/Toast/useToast";
+
+const store = useStore();
+const router = useRouter();
+const route = useRoute();
+
+// Form data
+const formData = ref({
+  service: "",
+  version: "",
+  environment: "",
+  file: null as File | null,
+});
+
+const isUploading = ref(false);
+const isDragging = ref(false);
+const fileInputRef = ref<HTMLInputElement | null>(null);
+const serviceError = ref("");
+const versionError = ref("");
+
+// Pre-fill form data from query parameters on mount
+onMounted(() => {
+  if (route.query.service) {
+    formData.value.service = route.query.service as string;
+  }
+  if (route.query.version) {
+    formData.value.version = route.query.version as string;
+  }
+  if (route.query.environment) {
+    formData.value.environment = route.query.environment as string;
+  }
+});
+
+// Navigate back to source maps list
+const navigateBack = () => {
+  router.push({
+    name: "SourceMaps",
+    query: {
+      org_identifier: store.state.selectedOrganization.identifier,
+    },
+  });
+};
+
+// Trigger file input click
+const triggerFileInput = () => {
+  fileInputRef.value?.click();
+};
+
+// Handle file input change
+const handleFileInput = (event: Event) => {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  if (file) {
+    validateAndSetFile(file);
+  }
+};
+
+// Handle drag and drop
+const handleDrop = (event: DragEvent) => {
+  isDragging.value = false;
+  const file = event.dataTransfer?.files[0];
+  if (file) {
+    validateAndSetFile(file);
+  }
+};
+
+// Validate and set file
+const validateAndSetFile = (file: File) => {
+  if (!file.name.endsWith('.zip')) {
+    toast({
+      variant: "error",
+      message: "Only ZIP files are allowed",
+    });
+    return;
+  }
+  formData.value.file = file;
+};
+
+// Remove file
+const removeFile = () => {
+  formData.value.file = null;
+  if (fileInputRef.value) {
+    fileInputRef.value.value = "";
+  }
+};
+
+// Format file size
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return "0 Bytes";
+  const k = 1024;
+  const sizes = ["Bytes", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
+};
+
+// Upload source maps
+const uploadSourceMaps = async () => {
+  // Validate every required field top-to-bottom and surface all errors at once:
+  // Service / Version as inline field errors, the ZIP file as a toast.
+  serviceError.value = formData.value.service ? "" : "Service is required";
+  versionError.value = formData.value.version ? "" : "Version is required";
+
+  let hasError = !formData.value.service || !formData.value.version;
+
+  if (!formData.value.file) {
+    toast({
+      variant: "error",
+      message: "Please select a ZIP file to upload",
+    });
+    hasError = true;
+  }
+
+  if (hasError) return;
+
+  isUploading.value = true;
+
+  try {
+    const uploadData = new FormData();
+    uploadData.append("service", formData.value.service);
+    uploadData.append("version", formData.value.version);
+    uploadData.append("env", formData.value.environment);
+    uploadData.append("file", formData.value.file);
+
+    await sourcemapsService.uploadSourceMaps(
+      store.state.selectedOrganization.identifier,
+      uploadData
+    );
+
+    toast({
+      variant: "success",
+      message: "Source maps uploaded successfully",
+    });
+
+    // Navigate back to source maps list
+    navigateBack();
+  } catch (error: any) {
+    console.error("Error uploading source maps:", error);
+    toast({
+      variant: "error",
+      message: error?.response?.data?.message || error?.message || "Failed to upload source maps",
+    });
+  } finally {
+    isUploading.value = false;
+  }
+};
+</script>
+
+<style lang="scss" scoped>
+.upload-source-maps-page {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--q-background);
+}
+
+.header-bar {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--q-border-color, #e0e0e0);
+}
+
+.form-content-area {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.upload-form {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.action-bar {
+  flex-shrink: 0;
+  border-top: 1px solid var(--q-border-color, #e0e0e0);
+}
+
+.upload-area {
+  border: 2px dashed var(--q-border-color, #e0e0e0);
+  border-radius: 8px;
+  padding: 2rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background-color: var(--q-background);
+
+  &:hover {
+    border-color: var(--q-primary);
+    background-color: rgba(var(--q-primary-rgb), 0.02);
+  }
+
+  &.drag-over {
+    border-color: var(--q-primary);
+    background-color: rgba(var(--q-primary-rgb), 0.05);
+    border-style: solid;
+  }
+
+  &.has-file {
+    padding: 1.5rem;
+    text-align: left;
+    border-style: solid;
+    border-color: var(--q-positive);
+    background-color: rgba(var(--q-positive-rgb), 0.02);
+  }
+}
+
+.upload-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-info {
+}
+
+:deep(.q-dark) {
+  .upload-area {
+    border-color: rgba(255, 255, 255, 0.1);
+
+    &:hover {
+      background-color: rgba(var(--q-primary-rgb), 0.05);
+    }
+
+    &.drag-over {
+      background-color: rgba(var(--q-primary-rgb), 0.1);
+    }
+
+    &.has-file {
+      background-color: rgba(var(--q-positive-rgb), 0.05);
+    }
+  }
+}
+</style>

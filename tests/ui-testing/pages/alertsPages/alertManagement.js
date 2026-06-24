@@ -1,0 +1,709 @@
+/**
+ * AlertManagement - Handles alert management operations
+ *
+ * This module contains methods for managing existing alerts:
+ * - Update/Edit alerts
+ * - Clone alerts
+ * - Pause/Resume alerts
+ * - Delete alerts
+ * - Search alerts
+ */
+
+import { expect } from '@playwright/test';
+const testLogger = require('../../playwright-tests/utils/test-logger.js');
+
+export class AlertManagement {
+    constructor(page, commonActions, locators) {
+        this.page = page;
+        this.commonActions = commonActions;
+        this.locators = locators;
+    }
+
+    /**
+     * Update an existing alert using Alerts 2.0 wizard UI
+     * Opens the alert edit wizard and modifies the operator condition
+     * @param {string} alertName - Name of the alert to update
+     */
+    async updateAlert(alertName) {
+        await this.page.locator(this.locators.alertUpdateButton.replace('{alertName}', alertName)).first().click();
+        await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        testLogger.info('Opened alert for editing (v3)', { alertName });
+
+        // All fields are in a flat tab-based layout (v3 UI), no step navigation needed
+        // Change operator from Contains to = to verify update functionality
+        const operatorDropdown = this.page.locator(this.locators.operatorSelect).first();
+        await expect(operatorDropdown).toBeVisible({ timeout: 5000 });
+        await operatorDropdown.click();
+        await this.page.waitForTimeout(500);
+        await this.page.getByText('=', { exact: true }).click();
+        await this.page.waitForTimeout(1000);
+        testLogger.info('Changed operator from Contains to =');
+
+        await this.page.locator(this.locators.alertSubmitButton).click();
+        await expect(this.page.getByText(this.locators.alertUpdatedMessage)).toBeVisible({ timeout: 30000 });
+        testLogger.info('Successfully updated alert', { alertName });
+    }
+
+    /**
+     * Clone an existing alert
+     * @param {string} alertName - Name of the alert to clone
+     * @param {string} streamType - Stream type for the cloned alert
+     * @param {string} streamName - Stream name for the cloned alert
+     */
+    async cloneAlert(alertName, streamType, streamName) {
+        await this.page.locator(this.locators.alertCloneButton.replace('{alertName}', alertName)).click();
+        await expect(this.page.locator(this.locators.cloneAlertTitle)).toBeVisible();
+        await this.page.locator(this.locators.cloneStreamType).click();
+        await this.page.waitForTimeout(2000);
+        await this.page.getByRole('option', { name: streamType }).locator('div').nth(2).click();
+        await this.page.locator(this.locators.cloneStreamName).click();
+        await this.page.getByText(streamName, { exact: true }).click();
+        await this.page.locator(this.locators.cloneSubmitButton).click();
+        await expect(this.page.getByText(this.locators.alertClonedMessage)).toBeVisible();
+        testLogger.info('Successfully cloned alert', { alertName });
+    }
+
+    /**
+     * Pause an alert using Alerts 2.0 UI
+     * @param {string} alertName - Name of the alert to pause
+     */
+    async pauseAlert(alertName) {
+        await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await this.page.waitForTimeout(2000);
+
+        const alertSelector = `[data-test="alert-list-${alertName}-pause-start-alert"]`;
+        const allButtons = this.page.locator(alertSelector);
+        const buttonCount = await allButtons.count();
+        testLogger.info('Found pause/start buttons for pause operation', { alertName, buttonCount });
+
+        // Find the button with text-negative class (enabled alert, showing pause icon)
+        let pauseButton = null;
+        for (let i = 0; i < buttonCount; i++) {
+            const btn = allButtons.nth(i);
+            const classList = await btn.getAttribute('class');
+            testLogger.debug(`Button ${i} class`, { classList });
+            if (classList && classList.includes('text-negative')) {
+                pauseButton = btn;
+                testLogger.info('Found enabled alert button to pause', { buttonIndex: i });
+                break;
+            }
+        }
+
+        if (!pauseButton) {
+            testLogger.warn('Could not find button with text-negative class, using first button');
+            pauseButton = allButtons.first();
+        }
+
+        await expect(pauseButton).toBeVisible({ timeout: 5000 });
+        await pauseButton.click();
+
+        await expect(this.page.getByText('Alert Paused Successfully')).toBeVisible({ timeout: 10000 });
+        await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await this.page.waitForTimeout(1000);
+        testLogger.info('Successfully paused alert', { alertName });
+    }
+
+    /**
+     * Resume an alert using Alerts 2.0 UI
+     * @param {string} alertName - Name of the alert to resume
+     */
+    async resumeAlert(alertName) {
+        testLogger.info('Starting resumeAlert', { alertName });
+
+        await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await this.page.waitForTimeout(2000);
+
+        const alertSelector = `[data-test="alert-list-${alertName}-pause-start-alert"]`;
+        const allButtons = this.page.locator(alertSelector);
+        const buttonCount = await allButtons.count();
+        testLogger.info('Found pause/start buttons for resume operation', { alertName, buttonCount });
+
+        // Find the button with text-positive class (paused alert, showing play icon)
+        let resumeButton = null;
+        for (let i = 0; i < buttonCount; i++) {
+            const btn = allButtons.nth(i);
+            const classList = await btn.getAttribute('class');
+            testLogger.info(`Button ${i} class for resume`, { classList });
+            if (classList && classList.includes('text-positive')) {
+                resumeButton = btn;
+                testLogger.info('Found paused alert button to resume', { buttonIndex: i });
+                break;
+            }
+        }
+
+        if (!resumeButton) {
+            testLogger.warn('Could not find button with text-positive class, using first button');
+            resumeButton = allButtons.first();
+        }
+
+        await expect(resumeButton).toBeVisible({ timeout: 10000 });
+        await resumeButton.click();
+        testLogger.info('Clicked resume button', { alertName });
+
+        await expect(this.page.getByText('Alert Resumed Successfully')).toBeVisible({ timeout: 15000 });
+        await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await this.page.waitForTimeout(1000);
+        testLogger.info('Successfully resumed alert', { alertName });
+    }
+
+    /**
+     * Delete alert by name
+     * @param {string} alertName - Name of the alert to delete
+     */
+    async deleteAlertByRow(alertName) {
+        const kebabButton = this.page.locator(`[data-test="alert-list-${alertName}-more-options"]`).first();
+        await kebabButton.waitFor({ state: 'visible', timeout: 5000 });
+        await kebabButton.click();
+
+        // Wait for delete option, retry if needed
+        try {
+            await this.page.getByText('Delete', { exact: true }).waitFor({ state: 'visible', timeout: 3000 });
+        } catch (e) {
+            testLogger.warn('Delete option not visible after first kebab click, retrying', { alertName });
+            await kebabButton.click();
+            await this.page.getByText('Delete', { exact: true }).waitFor({ state: 'visible', timeout: 5000 });
+        }
+
+        await this.page.getByText('Delete', { exact: true }).click();
+        await this.page.locator(this.locators.confirmButton).click();
+        await expect(this.page.locator(`[data-test-message="${this.locators.alertDeletedMessage}"]`)).toBeVisible();
+        await this.page.locator(`[data-test-message="${this.locators.alertDeletedMessage}"]`).waitFor({ state: 'hidden' });
+    }
+
+    /**
+     * Search for alerts by name
+     * @param {string} alertName - Name of the alert to search for
+     */
+    async searchAlert(alertName) {
+        // OInput renders data-test on a wrapper div; the native <input> gets data-test="{parent}-field".
+        // Playwright can't fill a div — target the inner input and force to bypass hidden-input check.
+        const inputField = this.page.locator(this.locators.alertSearchInputField);
+        await inputField.waitFor({ state: 'attached', timeout: 10000 });
+        await inputField.fill('', { force: true });
+        await inputField.fill(alertName.toLowerCase(), { force: true });
+        await this.page.waitForTimeout(2000);
+
+        // Wait for either search results or no data message
+        try {
+            await Promise.race([
+                this.page.locator(this.locators.tableLocator).waitFor({ state: 'visible', timeout: 30000 }),
+                this.page.locator('[data-test="o2-empty-state"]').waitFor({ state: 'visible', timeout: 30000 })
+            ]);
+        } catch (error) {
+            testLogger.error('Neither table nor no data message found after search', { alertName, error: error.message });
+            throw new Error(`Failed to search for alert "${alertName}": Neither table nor empty state appeared`);
+        }
+    }
+
+    /**
+     * Search for an alert and delete ALL instances of it across all folders
+     * @param {string} alertName - Name of the alert to search and delete
+     */
+    async searchAndDeleteAlert(alertName) {
+        testLogger.info('Searching for alert to delete across all folders', { alertName });
+
+        // Check if we're already on alerts page before trying to navigate
+        const currentUrl = this.page.url();
+        if (!currentUrl.includes('/alerts')) {
+            await this.page.locator(this.locators.alertMenuItem).click();
+            await this.page.waitForTimeout(2000);
+        } else {
+            testLogger.debug('Already on alerts page, skipping navigation');
+        }
+
+        const toggleBtn = this.page.locator('[data-test="alert-list-search-across-folders-toggle"]');
+        await toggleBtn.click({ force: true });
+        await this.page.waitForTimeout(500);
+
+        const inputField = this.page.locator(this.locators.alertSearchInputField);
+        await inputField.waitFor({ state: 'attached', timeout: 10000 });
+        await inputField.fill('', { force: true });
+        await inputField.fill(alertName, { force: true });
+        await this.page.waitForTimeout(2000);
+
+        let deletedCount = 0;
+        while (true) {
+            try {
+                await this.page.getByRole('cell', { name: alertName }).first().waitFor({ state: 'visible', timeout: 3000 });
+                testLogger.debug('Found alert instance, deleting', { alertName, instance: deletedCount + 1 });
+
+                await this.deleteAlertByRow(alertName);
+                deletedCount++;
+                testLogger.debug('Deleted alert instance', { alertName, deletedCount });
+
+                await this.page.waitForTimeout(1000);
+            } catch (e) {
+                testLogger.info('No more instances of alert found in search', { alertName, totalDeleted: deletedCount });
+                break;
+            }
+        }
+
+        if (deletedCount === 0) {
+            testLogger.warn('Alert not found for deletion', { alertName });
+        } else {
+            testLogger.info('Successfully deleted all instances of alert', { alertName, totalDeleted: deletedCount });
+        }
+    }
+
+    /**
+     * Delete imported alert (handles multiple instances)
+     * @param {string} alertName - Name of the alert to delete
+     */
+    async deleteImportedAlert(alertName) {
+        let alertExists = true;
+        let attempts = 0;
+        const maxAttempts = 10;
+
+        while (alertExists && attempts < maxAttempts) {
+            try {
+                await this.page.getByRole('cell', { name: alertName }).first().waitFor({ timeout: 2000 });
+
+                const alertRows = this.page.getByRole('row').filter({ hasText: alertName });
+                const count = await alertRows.count();
+
+                if (count === 0) {
+                    alertExists = false;
+                    break;
+                }
+
+                await alertRows.first()
+                    .locator(`[data-test="alert-list-${alertName}-more-options"]`).click();
+                await this.page.waitForTimeout(1000);
+
+                await this.page.getByText('Delete').click();
+                await this.page.waitForTimeout(1000);
+                await this.page.locator('[data-test="confirm-dialog"] [data-test="o-dialog-primary-btn"]').click();
+                await expect(this.page.locator('[data-test-variant="success"] [data-test="o-toast-message"]').filter({ hasText: 'Alert deleted' })).toBeVisible();
+
+                await this.page.waitForTimeout(3000);
+                attempts++;
+
+                testLogger.info('Successfully deleted alert instance', { attempts, alertName });
+            } catch (error) {
+                testLogger.info('No more instances found or error occurred', { error: error.message });
+                alertExists = false;
+            }
+        }
+
+        if (attempts > 0) {
+            testLogger.info('Successfully deleted all instances of alert', { attempts, alertName });
+        } else {
+            testLogger.info('No instances of alert found to delete', { alertName });
+        }
+    }
+
+    /**
+     * Trigger an alert manually from the alert list's more options menu
+     * @param {string} alertName - Name of the alert to trigger
+     * @returns {Promise<boolean>} - True if trigger was successful
+     */
+    async triggerAlertManually(alertName) {
+        testLogger.info('Triggering alert manually', { alertName });
+
+        let alertCell = this.page.getByRole('cell', { name: alertName }).first();
+        let isVisible = await alertCell.isVisible({ timeout: 3000 }).catch(() => false);
+
+        if (!isVisible) {
+            const orgName = process.env["ORGNAME"] || 'default';
+            const alertsUrl = `/web/alerts?org_identifier=${orgName}`;
+            await this.page.goto(alertsUrl);
+            await this.page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+            await this.page.waitForTimeout(2000);
+            testLogger.info('Navigated to alerts page');
+
+            await this.searchAlert(alertName);
+            await this.page.waitForTimeout(2000);
+
+            alertCell = this.page.getByRole('cell', { name: alertName }).first();
+        }
+
+        await alertCell.waitFor({ state: 'visible', timeout: 15000 });
+        testLogger.info('Found alert cell', { alertName });
+
+        const alertRow = alertCell.locator('xpath=ancestor::tr');
+        const moreOptionsBtn = alertRow.locator(`[data-test="alert-list-${alertName}-more-options"]`);
+        await moreOptionsBtn.waitFor({ state: 'visible', timeout: 5000 });
+        await moreOptionsBtn.click();
+        await this.page.waitForTimeout(500);
+        testLogger.info('Clicked more options menu');
+
+        const triggerOption = this.page.locator(`[data-test="alert-list-${alertName}-trigger-alert"]`);
+        await triggerOption.waitFor({ state: 'visible', timeout: 5000 });
+
+        // Start watching for the PATCH /trigger API call BEFORE clicking,
+        // so we never miss it regardless of how fast the API responds.
+        const triggerApiResponse = this.page.waitForResponse(
+            resp =>
+                resp.request().method() === 'PATCH' &&
+                /\/alerts\/[^/?]+\/trigger/.test(resp.url()),
+            { timeout: 10000 }
+        );
+
+        await triggerOption.click();
+        testLogger.info('Clicked Trigger option');
+
+        // Primary check: verify the API call was made and succeeded.
+        try {
+            const response = await triggerApiResponse;
+            const status = response.status();
+            if (response.ok()) {
+                testLogger.info('Alert trigger API call succeeded', { status });
+                return true;
+            }
+            const body = await response.json().catch(() => null);
+            testLogger.error('Alert trigger API call failed', { status, body });
+            return false;
+        } catch (apiErr) {
+            // API call not detected — fall back to notification polling.
+            testLogger.warn('Trigger API response not detected, falling back to notification check', { error: apiErr.message });
+        }
+
+        // Fallback: poll for the success toast (2s lifetime — use waitFor, not isVisible).
+        try {
+            await this.page.getByText('Alert triggered successfully').waitFor({ state: 'visible', timeout: 7000 });
+            testLogger.info('Alert trigger success notification received');
+            return true;
+        } catch (_) {
+            // not found — fall through to error check
+        }
+
+        try {
+            const errorNotification = this.page.getByText(/Failed to trigger|Error sending notification/i);
+            await errorNotification.waitFor({ state: 'visible', timeout: 3000 });
+            const errorText = await errorNotification.textContent().catch(() => 'Unknown error');
+            testLogger.error('Alert trigger failed - error notification shown', { errorText });
+            return false;
+        } catch (_) {
+            // no error notification either
+        }
+
+        testLogger.warn('No notification found after trigger');
+        return false;
+    }
+
+    /**
+     * Open the alert history drawer for a specific alert
+     * @param {string} alertName - Name of the alert
+     */
+    async openAlertHistoryDrawer(alertName) {
+        testLogger.info('Opening alert history drawer', { alertName });
+
+        await this.searchAlert(alertName);
+        await this.page.waitForTimeout(1000);
+
+        const alertRow = this.page.locator(`tr:has-text("${alertName}")`).first();
+        await alertRow.waitFor({ state: 'visible', timeout: 10000 });
+
+        const alertNameCell = alertRow.locator('td').nth(1);
+        await alertNameCell.click();
+        await this.page.waitForTimeout(1500);
+
+        await expect(this.page.getByText('Alert History', { exact: false }).first()).toBeVisible({ timeout: 5000 });
+        testLogger.info('Alert history drawer opened');
+    }
+
+    /**
+     * Get alert history stats from the drawer
+     * @returns {Promise<{totalEvaluations: number, firingCount: number}>}
+     */
+    async getAlertHistoryStats() {
+        let totalEvaluations = 0;
+        let firingCount = 0;
+
+        try {
+            const totalText = await this.page.locator('text=Total Evaluations').locator('..').locator('div.tw-text-xl').textContent({ timeout: 5000 });
+            totalEvaluations = parseInt(totalText, 10) || 0;
+        } catch (e) {
+            testLogger.warn('Could not get total evaluations');
+        }
+
+        try {
+            const firingText = await this.page.locator('text=Firing').locator('..').locator('div.tw-text-xl').textContent({ timeout: 5000 });
+            firingCount = parseInt(firingText, 10) || 0;
+        } catch (e) {
+            testLogger.warn('Could not get firing count');
+        }
+
+        testLogger.info('Alert history stats', { totalEvaluations, firingCount });
+        return { totalEvaluations, firingCount };
+    }
+
+    /**
+     * Close the alert history drawer (legacy) or details dialog (PR #10470)
+     */
+    async closeAlertHistoryDrawer() {
+        // Try new dialog close button first (PR #10470)
+        const newCloseBtn = this.page.locator('[data-test="alert-details-close-btn"]');
+        if (await newCloseBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await newCloseBtn.click();
+            await this.page.waitForTimeout(500);
+            testLogger.info('Closed alert details dialog (new)');
+            return;
+        }
+        // Fallback to legacy drawer close
+        const closeBtn = this.page.locator('[data-test="alert-history-drawer-close-btn"]');
+        if (await closeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await closeBtn.click();
+            await this.page.waitForTimeout(500);
+            testLogger.info('Closed alert history drawer (legacy)');
+            return;
+        }
+        // Last resort: close button fallback
+        const lastResortClose = this.page.locator('[data-test="o-dialog-close-btn"]').first();
+        if (await lastResortClose.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await lastResortClose.click();
+        } else {
+            await this.page.locator('body').click({ position: { x: 10, y: 10 } });
+        }
+        testLogger.info('Closed dialog via close button fallback');
+    }
+
+    /**
+     * Open alert details dialog by clicking alert name in the list (PR #10470)
+     * The new AlertHistoryDrawer is rendered inside a q-dialog
+     * @param {string} alertName - Name of the alert
+     */
+    async openAlertDetailsDialog(alertName) {
+        testLogger.info('Opening alert details dialog', { alertName });
+
+        // Try folder-specific search first
+        await this.searchAlert(alertName);
+        await this.page.waitForTimeout(1000);
+
+        let alertRow = this.page.locator(`tr:has-text("${alertName}")`).first();
+        const rowVisible = await alertRow.isVisible({ timeout: 5000 }).catch(() => false);
+
+        if (!rowVisible) {
+            // Fallback: enable "search across folders" and retry
+            testLogger.info('Alert not found in current folder, retrying across all folders', { alertName });
+            const toggle = this.page.locator(this.locators.searchAcrossFoldersToggle);
+            if (await toggle.isVisible({ timeout: 2000 }).catch(() => false)) {
+                const toggleBtnAlt = this.page.locator('[data-test="alert-list-search-across-folders-toggle"]');
+                await toggleBtnAlt.click({ force: true });
+                await this.page.waitForTimeout(500);
+            }
+            await this.searchAlert(alertName);
+            await this.page.waitForTimeout(1000);
+            alertRow = this.page.locator(`tr:has-text("${alertName}")`).first();
+        }
+
+        await alertRow.waitFor({ state: 'visible', timeout: 15000 });
+
+        // Click the alert name cell (2nd column) to open details dialog
+        const alertNameCell = alertRow.locator('td').nth(1);
+        await alertNameCell.click();
+        await this.page.waitForTimeout(1500);
+
+        // Wait for the new dialog to appear
+        await expect(this.page.locator('[data-test="alert-details-dialog"]')).toBeVisible({ timeout: 10000 });
+        testLogger.info('Alert details dialog opened', { alertName });
+    }
+
+    /**
+     * Verify alert was triggered by checking the alert history
+     * @param {string} alertName - Name of the alert
+     * @param {number} expectedFiringCount - Expected minimum firing count
+     * @returns {Promise<boolean>} - True if firing count meets expectation
+     */
+    async verifyAlertTriggeredInHistory(alertName, expectedFiringCount = 1) {
+        await this.openAlertHistoryDrawer(alertName);
+        const stats = await this.getAlertHistoryStats();
+        await this.closeAlertHistoryDrawer();
+
+        const triggered = stats.firingCount >= expectedFiringCount;
+        testLogger.info('Alert trigger verification', {
+            alertName,
+            expectedFiringCount,
+            actualFiringCount: stats.firingCount,
+            triggered
+        });
+        return triggered;
+    }
+
+    /**
+     * Verify alert trigger via validation stream (self-referential approach)
+     * @param {string} alertName - Name of the alert to search for
+     * @param {string} validationStreamName - Name of the validation stream
+     * @param {Object} logsPage - Instance of LogsPage for stream selection
+     * @param {number} waitTimeMs - Time to wait for alert processing
+     * @returns {Promise<{found: boolean, logText: string|null}>}
+     */
+    async verifyAlertTriggerInValidationStream(alertName, validationStreamName, logsPage, waitTimeMs = 30000) {
+        testLogger.info('Verifying alert trigger in validation stream', { alertName, validationStreamName, waitTimeMs });
+
+        await this.page.waitForTimeout(waitTimeMs);
+
+        await this.page.locator('[data-test="menu-link-\\/logs-item"]').click();
+        await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+        await this.page.waitForTimeout(2000);
+
+        try {
+            await logsPage.selectStream(validationStreamName, 2, 5000);
+            await this.page.waitForTimeout(1000);
+        } catch (streamError) {
+            testLogger.warn('Validation stream not found - alert likely did not fire', {
+                alertName,
+                validationStreamName,
+                error: streamError.message
+            });
+            // Try to clean up UI state, but don't fail if browser is closed
+            try {
+                await this.page.locator('body').click({ position: { x: 10, y: 10 } });
+                await this.page.waitForTimeout(500);
+                await this.page.locator('body').click({ position: { x: 10, y: 10 } });
+                await this.page.waitForTimeout(500);
+            } catch (cleanupError) {
+                // Browser may already be closed due to timeout - ignore
+            }
+            return { found: false, logText: null };
+        }
+
+        await logsPage.clickRefreshButton();
+        await this.page.waitForTimeout(3000);
+
+        let logTableCell = this.page.locator('[data-test="log-table-column-0-source"]');
+        let logCount = await logTableCell.count();
+
+        if (logCount === 0) {
+            logTableCell = this.page.locator('tbody tr');
+            logCount = await logTableCell.count();
+        }
+
+        testLogger.info(`Found ${logCount} log entries in validation stream`);
+
+        let alertFound = false;
+        let foundLogText = null;
+
+        for (let i = 0; i < logCount && !alertFound; i++) {
+            const logText = await logTableCell.nth(i).textContent();
+            if (logText && logText.includes(alertName)) {
+                alertFound = true;
+                foundLogText = logText;
+                testLogger.info('SUCCESS: Alert notification found in validation stream!', {
+                    alertName,
+                    logIndex: i,
+                    logTextPreview: logText.substring(0, 400)
+                });
+            }
+        }
+
+        if (!alertFound) {
+            testLogger.warn('Alert notification not found in validation stream', {
+                alertName,
+                validationStreamName,
+                logsChecked: logCount
+            });
+        }
+
+        return { found: alertFound, logText: foundLogText };
+    }
+
+    // =========================================================================
+    // ALERT EDIT — DEDUPLICATION REGRESSION HELPERS
+    // =========================================================================
+
+    /**
+     * Wait for the alert list page to be ready (canonical landmark).
+     * @param {number} timeout
+     */
+    async waitForAlertListReady(timeout = 30000) {
+        await this.page.locator(this.locators.alertListPage).waitFor({ state: 'visible', timeout });
+    }
+
+    /**
+     * Open the alert edit screen by clicking the alert's update (pencil) button.
+     * The list row exposes `[data-test="alert-list-{name}-update-alert"]` (AlertList.vue:312).
+     * @param {string} alertName
+     */
+    async openAlertEditByName(alertName) {
+        const updateBtn = this.page.locator(`[data-test="alert-list-${alertName}-update-alert"]`).first();
+        await expect(updateBtn).toBeVisible({ timeout: 10000 });
+        await updateBtn.click();
+        // Wait for the AddAlert form to render — `add-alert-submit-btn` is the canonical landmark.
+        await this.page.locator(this.locators.alertSubmitButton).waitFor({ state: 'visible', timeout: 15000 });
+        testLogger.info('Opened alert edit view', { alertName });
+    }
+
+    /**
+     * Activate the Advanced tab in the AddAlert v3 wizard.
+     * Deduplication lives in this tab (AddAlert.vue line ~273).
+     */
+    async openAdvancedTab() {
+        const advancedTab = this.page.locator(this.locators.addAlertTabAdvanced);
+        await expect(advancedTab).toBeVisible({ timeout: 10000 });
+        await advancedTab.click();
+        // Wait for the dedup fingerprint OSelect wrapper to mount in the Advanced tab.
+        await this.page.locator(this.locators.dedupFingerprintFieldsSelect).waitFor({ state: 'visible', timeout: 10000 });
+        testLogger.info('Switched to Advanced tab — deduplication panel visible');
+    }
+
+    /**
+     * Read currently selected fingerprint field values from the OSelect trigger.
+     * OSelect exposes `data-test-selected-value` (comma-joined for multiple).
+     * @returns {Promise<string[]>}
+     */
+    async getSelectedFingerprintFields() {
+        const trigger = this.page.locator(this.locators.dedupFingerprintFieldsTrigger);
+        await expect(trigger).toBeVisible({ timeout: 5000 });
+        const raw = await trigger.getAttribute('data-test-selected-value');
+        if (!raw) return [];
+        return raw.split(',').map(v => v.trim()).filter(Boolean);
+    }
+
+    /**
+     * Remove all currently selected fingerprint fields by opening the OSelect popover
+     * and clicking each previously selected option to toggle it OFF (multi-select).
+     * Returns the number of fields removed.
+     */
+    async removeAllFingerprintFields() {
+        const trigger = this.page.locator(this.locators.dedupFingerprintFieldsTrigger);
+        await expect(trigger).toBeVisible({ timeout: 5000 });
+
+        const selectedBefore = await this.getSelectedFingerprintFields();
+        testLogger.info('Removing fingerprint fields — initial selection', { selected: selectedBefore });
+
+        if (selectedBefore.length === 0) {
+            testLogger.warn('No fingerprint fields selected to remove');
+            return 0;
+        }
+
+        await trigger.click();
+        const popover = this.page.locator(this.locators.dedupFingerprintFieldsPopover);
+        await expect(popover).toBeVisible({ timeout: 5000 });
+
+        let removed = 0;
+        for (const value of selectedBefore) {
+            // Per-value option uses `data-test-value="<value>"`
+            const option = popover.locator(`[data-test="alert-dedup-fingerprint-fields-option"][data-test-value="${value}"]`).first();
+            await expect(option).toBeVisible({ timeout: 5000 });
+            await option.click();
+            removed += 1;
+            // Wait for the trigger's selected-value attribute to no longer include this value.
+            await expect.poll(async () => {
+                const current = await trigger.getAttribute('data-test-selected-value');
+                if (!current) return [];
+                return current.split(',').map(v => v.trim()).filter(Boolean);
+            }, { timeout: 5000 }).not.toContain(value);
+            testLogger.info('Deselected fingerprint option', { value, removed });
+        }
+
+        // Close the popover via keyboard — Escape is the canonical dismissal.
+        await this.page.keyboard.press('Escape');
+        await popover.waitFor({ state: 'hidden', timeout: 5000 });
+
+        return removed;
+    }
+
+    /**
+     * Submit the AddAlert form (Save button) and wait for the success toast.
+     * @returns {Promise<void>}
+     */
+    async submitAlertEdit() {
+        const submitBtn = this.page.locator(this.locators.alertSubmitButton);
+        await expect(submitBtn).toBeEnabled({ timeout: 10000 });
+        await submitBtn.click();
+        // OToast variant=success carries data-test="o-toast-success"; data-test-message holds the text.
+        await this.page.locator(this.locators.oToastSuccess).first().waitFor({ state: 'visible', timeout: 15000 });
+        testLogger.info('Alert update submitted — success toast visible');
+    }
+}

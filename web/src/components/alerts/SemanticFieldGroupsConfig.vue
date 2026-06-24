@@ -1,0 +1,466 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <div class="semantic-field-groups-config">
+    <div class="section-header tw:mb-3">
+      <div class="tw:text-xl tw:font-semibold">
+        {{ t("settings.correlation.semanticFieldGroupsTitle") }}
+      </div>
+      <div class="tw:text-xs tw:text-gray-400">
+        {{ t("correlation.semanticFieldGroupsCaption") }}
+      </div>
+    </div>
+
+    <!-- Category Filter -->
+    <div class="tw:flex tw:gap-3 tw:mb-3">
+      <div class="tw:w-full col-md-4">
+        <OSelect
+          data-test="semantic-group-category-select"
+          v-model="selectedCategory"
+          :options="categoryOptions"
+          :label="t('correlation.category')"
+          :hint="t('correlation.categoryHint')"
+          class="showLabelOnTop"
+          style="max-width: 100%"
+        />
+      </div>
+      <div class="tw:w-full col-md-8 tw:flex tw:items-center tw:justify-end tw:gap-2">
+        <OButton
+          data-test="correlation-semanticfieldgroup-export-json-btn"
+          variant="outline"
+          size="sm"
+          :disabled="localGroups.length === 0"
+          @click="exportGroups"
+          >{{ t("correlation.exportToJson") }}</OButton
+        >
+        <OButton
+          data-test="correlation-semanticfieldgroup-import-json-btn"
+          variant="outline"
+          size="sm"
+          @click="navigateToImport"
+          >{{ t("correlation.importFromJson") }}</OButton
+        >
+        <OButton
+          data-test="correlation-semanticfieldgroup-add-custom-group-btn"
+          variant="primary"
+          size="sm"
+          @click="addGroup"
+          >{{ t("correlation.addCustomGroup") }}</OButton
+        >
+        <slot name="header-actions" />
+      </div>
+    </div>
+
+    <!-- Filtered Semantic Groups List -->
+    <div v-if="filteredGroups.length > 0" class="groups-list tw:mb-3">
+      <SemanticGroupItem
+        v-for="(group, index) in filteredGroups"
+        :key="`${group.id}-${index}`"
+        :data-group-id="group.id"
+        :group="group"
+        @update="updateGroupByFilter(index, $event)"
+        @delete="removeGroupByFilter(index)"
+      />
+    </div>
+    <div v-else class="tw:text-center tw:p-4 tw:text-gray-400">
+      <OIcon name="info" size="md" class="tw:mb-2" />
+      <div>
+        {{
+          t("correlation.noSemanticGroupsInCategory", {
+            category: selectedCategory || t("correlation.other"),
+          })
+        }}
+      </div>
+    </div>
+
+    <!-- Total groups indicator -->
+    <div v-if="localGroups.length > 0" class="tw:text-xs tw:text-gray-400 tw:mt-2">
+      {{
+        t("correlation.showingGroups", {
+          filterGroupLength: filteredGroups.length,
+          localGroupLength: localGroups.length,
+        })
+      }}
+    </div>
+
+    <!-- Fingerprint Fields Selection (only for per-alert, not org-level) -->
+    <div
+      v-if="localGroups.length > 0 && showFingerprintFields"
+      class="fingerprint-section tw:mt-4"
+    >
+      <div class="tw:text-base tw:font-medium tw:mb-2">
+        {{ t("correlation.deduplicateFields") }} *
+        <OTooltip :content="t('correlation.deduplicateFieldTooltip')" />
+      </div>
+      <div class="tw:text-xs tw:text-gray-400 tw:mb-3">
+        {{ t("correlation.alertDeduplicationMessage") }}
+      </div>
+      <div class="fingerprint-checkboxes">
+        <OCheckbox
+          :data-test="`fingerprint-field-checkbox-${group.id}`"
+          v-for="group in localGroups"
+          :key="group.id"
+          v-model="localFingerprintFields"
+          :value="group.id"
+          :label="group.display"
+          class="fingerprint-checkbox"
+          @update:model-value="emitUpdate"
+        />
+      </div>
+      <div
+        v-if="localFingerprintFields.length === 0"
+        class="tw:text-red-500 tw:text-xs tw:mt-2"
+      >
+        {{ t("correlation.atLeastOneDeduplicationField") }}
+      </div>
+    </div>
+
+    <!-- Import Drawer -->
+    <ImportSemanticGroupsDrawer
+      data-test="semantic-field-groups-config-import-drawer"
+      v-model:open="showImportDrawer"
+      :current-groups="localGroups"
+      :org-id="store.state.selectedOrganization.identifier"
+      @apply="handleImportApply"
+    />
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { ref, computed, watch, onMounted, nextTick } from "vue";
+import { useStore } from "vuex";
+import { useI18n } from "vue-i18n";
+import { v4 as uuidv4 } from "uuid";
+import SemanticGroupItem from "./SemanticGroupItem.vue";
+import ImportSemanticGroupsDrawer from "./ImportSemanticGroupsDrawer.vue";
+import OButton from "@/lib/core/Button/OButton.vue";
+import OSelect from "@/lib/forms/Select/OSelect.vue";
+import OTooltip from "@/lib/overlay/Tooltip/OTooltip.vue";
+import OCheckbox from "@/lib/forms/Checkbox/OCheckbox.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+
+const store = useStore();
+const { t } = useI18n();
+
+interface SemanticGroup {
+  id: string;
+  display: string;
+  group?: string;
+  fields: string[];
+}
+
+interface Props {
+  semanticFieldGroups?: SemanticGroup[];
+  fingerprintFields?: string[];
+  showFingerprintFields?: boolean;
+  scrollToGroupId?: string;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  semanticFieldGroups: () => [],
+  fingerprintFields: () => [],
+  showFingerprintFields: false,
+  scrollToGroupId: undefined,
+});
+
+const emit = defineEmits<{
+  (e: "update:semanticFieldGroups", groups: SemanticGroup[]): void;
+  (e: "update:fingerprintFields", fields: string[]): void;
+}>();
+
+const localGroups = ref<SemanticGroup[]>([...props.semanticFieldGroups]);
+const localFingerprintFields = ref<string[]>([...props.fingerprintFields]);
+const selectedCategory = ref<string | null>(null);
+const showImportDrawer = ref(false);
+
+// Watch for external changes and auto-select first category
+watch(
+  () => props.semanticFieldGroups,
+  (newGroups) => {
+    localGroups.value = [...newGroups];
+    // Auto-select first category if none selected
+    if (!selectedCategory.value && localGroups.value.length > 0) {
+      nextTick(() => {
+        if (categoryOptions.value.length > 0) {
+          selectedCategory.value = categoryOptions.value[0].value;
+        }
+      });
+    }
+  },
+  { deep: true },
+);
+
+watch(
+  () => props.fingerprintFields,
+  (newFields) => {
+    localFingerprintFields.value = [...newFields];
+  },
+);
+
+// Helper function to normalize category names
+const normalizeCategoryName = (category: string): string => {
+  if (!category) return "Other";
+
+  const normalized = category.toLowerCase();
+
+  // Map common variations to consistent names
+  const categoryMap: Record<string, string> = {
+    kubernetes: "Kubernetes",
+    k8s: "Kubernetes",
+    aws: "AWS",
+    amazon: "AWS",
+    azure: "Azure",
+    gcp: "GCP",
+    google: "GCP",
+    common: "Common",
+    generic: "Common",
+    other: "Other",
+  };
+
+  return categoryMap[normalized] || category;
+};
+
+// Build category options from localGroups (the actual data)
+const categoryOptions = computed(() => {
+  if (localGroups.value.length === 0) {
+    return [];
+  }
+
+  // Group semantic groups by their 'group' field
+  const groupsMap = new Map<string, number>();
+
+  for (const group of localGroups.value) {
+    const category = normalizeCategoryName(group.group || "Other");
+    groupsMap.set(category, (groupsMap.get(category) || 0) + 1);
+  }
+
+  // Convert to options, sorted by category name
+  return Array.from(groupsMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([category, count]) => ({
+      label: category,
+      value: category,
+      count: count,
+    }));
+});
+
+// Filter groups by selected category
+const filteredGroups = computed(() => {
+  if (!selectedCategory.value) {
+    return localGroups.value;
+  }
+  return localGroups.value.filter(
+    (group) =>
+      normalizeCategoryName(group.group || "Other") === selectedCategory.value,
+  );
+});
+
+// Group ID options for fingerprint selection
+const groupIdOptions = computed(() => {
+  return localGroups.value.map((group) => ({
+    label: group.display,
+    value: group.id,
+  }));
+});
+
+// Generate a short unique ID for new groups using first 8 chars of UUID
+const generateShortId = (): string => {
+  return uuidv4().substring(0, 8);
+};
+
+// Add a new custom group (assign to current category if selected)
+const addGroup = () => {
+  const newGroup: SemanticGroup = {
+    id: generateShortId(),
+    display: "",
+    group: selectedCategory.value || "Other",
+    fields: [],
+  };
+  localGroups.value.unshift(newGroup);
+  emitUpdate();
+};
+
+// Update group by filtered index - find actual index in localGroups
+const updateGroupByFilter = (
+  filteredIndex: number,
+  updatedGroup: SemanticGroup,
+) => {
+  const group = filteredGroups.value[filteredIndex];
+  const actualIndex = localGroups.value.findIndex(
+    (g) => g.id === group.id && g.display === group.display,
+  );
+  if (actualIndex !== -1) {
+    localGroups.value[actualIndex] = updatedGroup;
+    emitUpdate();
+  }
+};
+
+// Remove group by filtered index - find actual index in localGroups
+const removeGroupByFilter = (filteredIndex: number) => {
+  const group = filteredGroups.value[filteredIndex];
+  const actualIndex = localGroups.value.findIndex(
+    (g) => g.id === group.id && g.display === group.display,
+  );
+  if (actualIndex !== -1) {
+    const removedId = localGroups.value[actualIndex].id;
+    localGroups.value.splice(actualIndex, 1);
+
+    // Remove from fingerprint fields if present
+    localFingerprintFields.value = localFingerprintFields.value.filter(
+      (id) => id !== removedId,
+    );
+
+    emitUpdate();
+  }
+};
+
+const exportGroups = () => {
+  const json = JSON.stringify(localGroups.value, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `semantic-groups-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const navigateToImport = () => {
+  showImportDrawer.value = true;
+};
+
+const handleImportApply = (importedGroups: SemanticGroup[]) => {
+  // Merge imported groups with existing groups
+  const groupsMap = new Map<string, SemanticGroup>();
+
+  // Add existing groups to map
+  localGroups.value.forEach((g) => groupsMap.set(g.id, g));
+
+  // Update or add imported groups
+  importedGroups.forEach((g) => groupsMap.set(g.id, g));
+
+  // Convert back to array
+  localGroups.value = Array.from(groupsMap.values());
+
+  emitUpdate();
+};
+
+const emitUpdate = () => {
+  emit("update:semanticFieldGroups", [...localGroups.value]);
+  emit("update:fingerprintFields", [...localFingerprintFields.value]);
+};
+
+// Auto-select first category on mount, or navigate to a specific group
+onMounted(async () => {
+  await nextTick();
+
+  if (props.scrollToGroupId) {
+    // Find and switch to the category that contains the requested group
+    const targetGroup = localGroups.value.find(
+      (g) => g.id === props.scrollToGroupId,
+    );
+    if (targetGroup) {
+      selectedCategory.value = targetGroup.group || "Other";
+      await nextTick(); // wait for filteredGroups to re-render
+    }
+  } else if (categoryOptions.value.length > 0 && !selectedCategory.value) {
+    selectedCategory.value = categoryOptions.value[0].value;
+  }
+
+  if (props.scrollToGroupId) {
+    await nextTick();
+    const el = document.querySelector(
+      `[data-group-id="${props.scrollToGroupId}"]`,
+    ) as HTMLElement | null;
+    if (el) {
+      // Scroll within the nearest scrollable parent to avoid pushing
+      // ancestor containers (main page layout) out of view
+      const scrollParent = el.closest(
+        ".tw\\:overflow-y-auto",
+      ) as HTMLElement | null;
+      if (scrollParent) {
+        const parentRect = scrollParent.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        const offset =
+          elRect.top -
+          parentRect.top -
+          parentRect.height / 2 +
+          elRect.height / 2;
+        scrollParent.scrollBy({ top: offset, behavior: "smooth" });
+      } else {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      // Blink the border to draw attention
+      el.classList.add("group-highlight");
+      setTimeout(() => el.classList.remove("group-highlight"), 2000);
+    }
+  }
+});
+</script>
+
+<style lang="scss" scoped>
+.semantic-field-groups-config {
+  width: 100%;
+}
+
+.section-header {
+  border-bottom: 1px solid var(--color-separator);
+  padding-bottom: 12px;
+}
+
+.groups-list {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+// Applied via JS to the target group item; :deep ensures it reaches child components
+:deep(.group-highlight) {
+  animation: group-border-blink 0.4s ease-in-out 3;
+}
+
+@keyframes group-border-blink {
+  0%,
+  100% {
+    outline: 2px solid transparent;
+  }
+  50% {
+    outline: 2px solid var(--q-primary);
+    border-radius: 4px;
+  }
+}
+
+.fingerprint-section {
+  border-top: 1px solid var(--color-separator);
+  padding-top: 16px;
+}
+
+.fingerprint-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.fingerprint-checkbox {
+  min-width: 200px;
+}
+
+.import-dialog-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+</style>

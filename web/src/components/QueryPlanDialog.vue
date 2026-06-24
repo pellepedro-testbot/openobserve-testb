@@ -1,0 +1,790 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <ODialog
+    v-model:open="showDialog"
+    data-test="query-plan-dialog"
+    size="full"
+    :title="t('search.queryPlan')"
+    @update:open="(v) => !v && onClose()"
+  >
+    <div class="query-plan-content tw:h-full tw:p-0">
+      <OSplitter
+        v-model="splitterPosition"
+        :horizontal="false"
+        separator-class="query-plan-splitter"
+        class="tw:h-full"
+      >
+        <!-- Left Pane: SQL Query -->
+        <template #before>
+          <section class="sql-query-pane tw:h-full">
+            <header class="pane-header">
+              <div class="tw:flex tw:items-center tw:gap-2">
+                <OIcon name="code" size="sm" class="pane-header__icon" />
+                <h3 class="pane-header__title">SQL Query</h3>
+              </div>
+            </header>
+            <div class="sql-query-content">
+              <pre class="sql-query-text"><code>{{ sqlQuery }}</code></pre>
+            </div>
+          </section>
+        </template>
+
+        <!-- Right Pane: Explain/Analyze Results -->
+        <template #after>
+          <section class="explain-results-pane tw:h-full">
+            <header class="pane-header">
+              <h3 class="pane-header__title">
+                {{
+                  showAnalyzeResults
+                    ? t("search.analyzeResults")
+                    : t("search.explainResults")
+                }}
+              </h3>
+              <div class="tw:flex-1" />
+              <OButton
+                v-if="!isAnalyzing && !showAnalyzeResults"
+                variant="primary"
+                size="sm"
+                :loading="loading"
+                @click="runAnalyze"
+              >
+                {{ t("search.analyze") }}
+                <OTooltip :content="t('search.analyzeTooltip')" />
+              </OButton>
+            </header>
+
+            <div v-if="loading" class="state-container">
+              <div class="tw:text-center">
+                <OSpinner variant="dots" size="lg" />
+                <div class="tw:mt-3 state-container__label">
+                  {{
+                    isAnalyzing
+                      ? t("search.runningAnalyze")
+                      : t("search.loadingPlan")
+                  }}
+                </div>
+              </div>
+            </div>
+
+            <div v-else-if="error" class="tw:p-4">
+              <OBanner variant="error" icon="error" :content="error" />
+            </div>
+
+            <!-- EXPLAIN ANALYZE view -->
+            <div v-else-if="showAnalyzeResults" class="plan-container">
+              <MetricsSummaryCard
+                v-if="summaryMetrics"
+                :metrics="summaryMetrics"
+                class="tw:mb-3"
+              />
+
+              <div class="plan-surface">
+                <div class="plan-surface__header">
+                  <span class="plan-surface__title">{{ t("search.executionPlan") }}</span>
+                </div>
+                <div class="plan-scroll-area">
+                  <QueryPlanTree
+                    v-if="planTree"
+                    :tree="planTree"
+                    :is-analyze="true"
+                  />
+                  <div v-else class="plan-empty">
+                    {{ t("search.noAnalyzePlanFound") }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- EXPLAIN view (tabs for logical/physical) -->
+            <div v-else class="plan-container">
+              <div class="plan-surface">
+                <div class="plan-surface__tabs">
+                  <OTabs v-model="activeTab" dense align="left">
+                    <OTab name="logical" :label="t('search.logicalPlan')" />
+                    <OTab name="physical" :label="t('search.physicalPlan')" />
+                  </OTabs>
+                </div>
+
+                <OTabPanels v-model="activeTab" animated>
+                  <OTabPanel name="logical">
+                    <div class="plan-scroll-area">
+                      <QueryPlanTree
+                        v-if="logicalPlanTree"
+                        :tree="logicalPlanTree"
+                        :is-analyze="false"
+                      />
+                      <div v-else class="plan-empty">
+                        {{ t("search.noLogicalPlan") }}
+                      </div>
+                    </div>
+                  </OTabPanel>
+
+                  <OTabPanel name="physical">
+                    <div class="plan-scroll-area">
+                      <QueryPlanTree
+                        v-if="physicalPlanTree"
+                        :tree="physicalPlanTree"
+                        :is-analyze="false"
+                      />
+                      <div v-else class="plan-empty">
+                        {{ t("search.noPhysicalPlan") }}
+                      </div>
+                    </div>
+                  </OTabPanel>
+                </OTabPanels>
+              </div>
+            </div>
+          </section>
+        </template>
+      </OSplitter>
+    </div>
+  </ODialog>
+</template>
+
+<script lang="ts">
+import OTabs from "@/lib/navigation/Tabs/OTabs.vue";
+import OTab from "@/lib/navigation/Tabs/OTab.vue";
+import OTabPanels from "@/lib/navigation/Tabs/OTabPanels.vue";
+import OTabPanel from "@/lib/navigation/Tabs/OTabPanel.vue";
+import OButton from "@/lib/core/Button/OButton.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+import OTooltip from "@/lib/overlay/Tooltip/OTooltip.vue";
+import ODialog from "@/lib/overlay/Dialog/ODialog.vue";
+import { defineComponent, ref, computed, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useStore } from "vuex";
+import streamingSearch from "@/services/streaming_search";
+import { useSearchStream } from "@/composables/useLogs/useSearchStream";
+import { generateTraceContext } from "@/utils/zincutils";
+import {
+  parseQueryPlanTree,
+  calculateSummaryMetrics,
+  findRemoteExecNode,
+  type OperatorNode,
+  type SummaryMetrics,
+} from "@/utils/queryPlanParser";
+import MetricsSummaryCard from "@/components/query-plan/MetricsSummaryCard.vue";
+import QueryPlanTree from "@/components/query-plan/QueryPlanTree.vue";
+import { searchState } from "@/composables/useLogs/searchState";
+import OSpinner from "@/lib/feedback/Spinner/OSpinner.vue";
+import OSplitter from "@/lib/core/Splitter/OSplitter.vue";
+import OBanner from "@/lib/feedback/Banner/OBanner.vue";
+
+export default defineComponent({
+  name: "QueryPlanDialog",
+  components: {
+    OSplitter,
+    OTabs,
+    OTab,
+    OTabPanels,
+    OTabPanel,
+    MetricsSummaryCard,
+    QueryPlanTree,
+    OButton,
+    ODialog,
+    OSpinner,
+    OIcon,
+    OTooltip,
+    OBanner,
+  },
+  props: {
+    modelValue: {
+      type: Boolean,
+      default: false,
+    },
+    searchObj: {
+      type: Object,
+      required: true,
+    },
+  },
+  emits: ["update:modelValue"],
+  setup(props, { emit }) {
+    const { t } = useI18n();
+    const store = useStore();
+    const { getSearchQueryPayload } = useSearchStream();
+
+    const loading = ref(false);
+    const error = ref("");
+    const logicalPlan = ref("");
+    const physicalPlan = ref("");
+    const analyzePlan = ref("");
+    const analyzePlanTreeOverride = ref<OperatorNode | null>(null); // For hierarchical phase nesting
+    const activeTab = ref("logical");
+    const isAnalyzing = ref(false);
+    const showAnalyzeResults = ref(false);
+    const splitterPosition = ref(50); // Split at 50%
+
+    let { searchObj } = searchState();
+
+    const showDialog = computed({
+      get: () => props.modelValue,
+      set: (val) => emit("update:modelValue", val),
+    });
+
+    // Get SQL query from searchObj
+    const sqlQuery = computed(() => {
+      return props.searchObj?.data?.query || "";
+    });
+
+    // Parse plans into tree structures
+    const logicalPlanTree = computed<OperatorNode | null>(() => {
+      if (!logicalPlan.value) return null;
+      return parseQueryPlanTree(logicalPlan.value);
+    });
+
+    const physicalPlanTree = computed<OperatorNode | null>(() => {
+      if (!physicalPlan.value) return null;
+      return parseQueryPlanTree(physicalPlan.value);
+    });
+
+    const planTree = computed<OperatorNode | null>(() => {
+      // Use override tree if available (for hierarchical phase nesting)
+      if (analyzePlanTreeOverride.value) {
+        return analyzePlanTreeOverride.value;
+      }
+      // Otherwise parse from text
+      if (!analyzePlan.value) return null;
+      return parseQueryPlanTree(analyzePlan.value);
+    });
+
+    // Calculate summary metrics for EXPLAIN ANALYZE
+    const summaryMetrics = computed<SummaryMetrics | null>(() => {
+      if (!analyzePlan.value) return null;
+      return calculateSummaryMetrics(analyzePlan.value);
+    });
+
+    const parsePlans = (responseData: any, isAnalyze: boolean = false) => {
+      // EXPLAIN returns: { hits: [{ plan_type: "logical_plan", plan: "..." }, { plan_type: "physical_plan", plan: "..." }] }
+      // EXPLAIN ANALYZE returns: { hits: [{ phase: 0, plan: "..." }, { phase: 1, plan: "..." }] }
+
+      logicalPlan.value = "";
+      physicalPlan.value = "";
+      analyzePlan.value = "";
+      analyzePlanTreeOverride.value = null;
+
+      if (!responseData || !responseData.hits) {
+        return;
+      }
+
+      if (isAnalyze) {
+        // For EXPLAIN ANALYZE: phase is numeric
+        // Phase 0: RemoteExec (coordinator)
+        // Phase 1+: Actual execution plans from workers
+        // We need to nest Phase 1+ plans as children of Phase 0 RemoteExec
+
+        // Separate phases
+        const phase0Hits = responseData.hits.filter(
+          (hit: any) => hit.phase === 0,
+        );
+        const phase1Hits = responseData.hits.filter(
+          (hit: any) => hit.phase === 1,
+        );
+
+        if (phase0Hits.length > 0 && phase1Hits.length > 0) {
+          // Parse phase 0
+          const phase0Plan = phase0Hits
+            .map((hit: any) => hit.plan || "")
+            .filter((plan: string) => plan.trim() !== "")
+            .join("\n");
+
+          // Parse Phase 0 into tree
+          const phase0Tree = parseQueryPlanTree(phase0Plan);
+
+          // Find RemoteExec or RemoteScanExec in phase 0
+          const remoteExec = findRemoteExecNode(phase0Tree);
+
+          if (remoteExec) {
+            // Parse each Phase 1 hit separately (one per partition)
+            // Each partition may have its own execution tree
+            const phase1Children: OperatorNode[] = [];
+
+            for (const hit of phase1Hits) {
+              const plan = hit.plan || "";
+              if (plan.trim()) {
+                const partitionTree = parseQueryPlanTree(plan);
+                // Add all top-level operators from this partition as children
+                if (partitionTree.children.length > 0) {
+                  phase1Children.push(...partitionTree.children);
+                }
+              }
+            }
+
+            // Attach all Phase 1 children to RemoteScanExec
+            if (phase1Children.length > 0) {
+              remoteExec.children = phase1Children;
+            }
+          }
+
+          // Store the merged hierarchy
+          // Set both the text (for metrics calculation) and the tree (for display)
+          analyzePlan.value = phase0Plan.trim();
+          analyzePlanTreeOverride.value = phase0Tree;
+        } else {
+          // Fallback: combine all phases if structure is unexpected
+          const allPlans = responseData.hits
+            .sort((a: any, b: any) => (a.phase || 0) - (b.phase || 0))
+            .map((hit: any) => hit.plan || "")
+            .filter((plan: string) => plan.trim() !== "")
+            .join("\n\n");
+
+          if (allPlans) {
+            analyzePlan.value = allPlans.trim();
+            analyzePlanTreeOverride.value = null; // Use default parsing
+          }
+        }
+      } else {
+        // For EXPLAIN: plan_type is string
+        responseData.hits.forEach((hit: any) => {
+          const planType = hit.plan_type || hit._source?.plan_type;
+          const planContent = hit.plan || hit._source?.plan || "";
+
+          if (planType === "logical_plan") {
+            logicalPlan.value = planContent.trim();
+          } else if (planType === "physical_plan") {
+            physicalPlan.value = planContent.trim();
+          }
+        });
+
+        // Fallback: if no plan_type, try to parse from combined text
+        if (
+          !logicalPlan.value &&
+          !physicalPlan.value &&
+          responseData.hits.length > 0
+        ) {
+          const combined = responseData.hits
+            .map((h: any) => h.plan || JSON.stringify(h))
+            .join("\n");
+
+          // Try to split by plan_type markers
+          const logicalMatch = combined.match(
+            /logical_plan[:\s]+(.+?)(?=physical_plan|$)/is,
+          );
+          const physicalMatch = combined.match(/physical_plan[:\s]+(.+?)$/is);
+
+          if (logicalMatch) {
+            logicalPlan.value = logicalMatch[1].trim();
+          }
+          if (physicalMatch) {
+            physicalPlan.value = physicalMatch[1].trim();
+          }
+        }
+      }
+    };
+
+    const parseSSEResponse = (sseText: string): any => {
+      // Parse Server-Sent Events format response
+      // Format: event: <event_type>\ndata: <json>\n\n
+      try {
+        const lines = sseText.split("\n");
+        let currentEvent = "";
+        let result: any = null;
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+
+          if (trimmed.startsWith("event:")) {
+            currentEvent = trimmed.substring(6).trim();
+          } else if (trimmed.startsWith("data:")) {
+            const dataContent = trimmed.substring(5).trim();
+
+            // Skip progress events and done marker
+            if (dataContent === "[[DONE]]" || currentEvent === "progress") {
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(dataContent);
+              // Look for actual search results with hits
+              if (
+                parsed &&
+                (parsed.hits !== undefined || parsed.total !== undefined)
+              ) {
+                result = parsed;
+              }
+            } catch (e) {
+              // Not JSON, skip
+            }
+          }
+        }
+
+        return result;
+      } catch (err) {
+        console.error("Error parsing SSE response:", err);
+        return null;
+      }
+    };
+
+    const fetchExplainPlan = async () => {
+      loading.value = true;
+      error.value = "";
+      logicalPlan.value = "";
+      physicalPlan.value = "";
+      analyzePlan.value = "";
+      showAnalyzeResults.value = false;
+
+      try {
+        // Build the complete query using getSearchQueryPayload()
+        // This method doesn't mutate searchObj, so no need to save/restore state
+        const queryReq = getSearchQueryPayload();
+
+        if (!queryReq || !queryReq.query || !queryReq.query.sql) {
+          error.value = t("search.errorFetchingPlan");
+          loading.value = false;
+          return;
+        }
+
+        // Wrap the SQL with EXPLAIN
+        const explainSQL = `EXPLAIN ${queryReq.query.sql}`;
+        const explainQueryPayload = {
+          ...queryReq,
+          query: {
+            ...queryReq.query,
+            sql: explainSQL,
+          },
+        };
+
+        const { traceId } = generateTraceContext();
+        const response = await streamingSearch.search({
+          org_identifier: store.state.selectedOrganization.identifier,
+          query: explainQueryPayload,
+          page_type: searchObj.data.stream.streamType || "logs",
+          search_type: "ui",
+          traceId,
+        });
+
+        // Parse SSE response - streaming API returns Server-Sent Events format
+        const parsedData = parseSSEResponse(response.data);
+
+        // Parse the response to extract logical and physical plans
+        if (parsedData) {
+          parsePlans(parsedData, false);
+
+          // Check if we got at least one plan
+          if (!logicalPlan.value && !physicalPlan.value) {
+            error.value = t("search.noPlanFound");
+          }
+        } else {
+          error.value = t("search.noPlanFound");
+        }
+      } catch (err: any) {
+        console.error("Error fetching explain plan:", err);
+        error.value =
+          err.response?.data?.message ||
+          err.message ||
+          t("search.errorFetchingPlan");
+      } finally {
+        loading.value = false;
+      }
+    };
+
+    const runAnalyze = async () => {
+      loading.value = true;
+      error.value = "";
+      isAnalyzing.value = true;
+
+      try {
+        // Build the complete query using getSearchQueryPayload()
+        // This method doesn't mutate searchObj, so no need to save/restore state
+        const queryReq = getSearchQueryPayload();
+
+        if (!queryReq || !queryReq.query || !queryReq.query.sql) {
+          error.value = t("search.errorRunningAnalyze");
+          loading.value = false;
+          isAnalyzing.value = false;
+          return;
+        }
+
+        // Wrap the SQL with EXPLAIN ANALYZE
+        const analyzeSQL = `EXPLAIN ANALYZE ${queryReq.query.sql}`;
+        const analyzeQueryPayload = {
+          ...queryReq,
+          query: {
+            ...queryReq.query,
+            sql: analyzeSQL,
+          },
+        };
+
+        const { traceId } = generateTraceContext();
+        const response = await streamingSearch.search({
+          org_identifier: store.state.selectedOrganization.identifier,
+          query: analyzeQueryPayload,
+          page_type: searchObj.data.stream.streamType || "logs",
+          search_type: "ui",
+          traceId,
+        });
+
+        // Parse SSE response - streaming API returns Server-Sent Events format
+        const parsedData = parseSSEResponse(response.data);
+
+        // Parse the response to extract execution plan with metrics
+        if (parsedData) {
+          parsePlans(parsedData, true);
+
+          // Check if we got the analyze plan
+          if (analyzePlan.value) {
+            showAnalyzeResults.value = true;
+          } else {
+            error.value = t("search.noAnalyzePlanFound");
+          }
+        } else {
+          error.value = t("search.noAnalyzePlanFound");
+        }
+      } catch (err: any) {
+        console.error("Error running analyze:", err);
+        error.value =
+          err.response?.data?.message ||
+          err.message ||
+          t("search.errorRunningAnalyze");
+      } finally {
+        loading.value = false;
+        isAnalyzing.value = false;
+      }
+    };
+
+    const onClose = () => {
+      emit("update:modelValue", false);
+    };
+
+    // ESC key handler
+    const handleEscKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && showDialog.value) {
+        onClose();
+      }
+    };
+
+    watch(
+      () => props.modelValue,
+      (newVal) => {
+        if (newVal && props.searchObj) {
+          fetchExplainPlan();
+          // Reset to logical tab when opening
+          activeTab.value = "logical";
+        }
+      },
+    );
+
+    // Reset activeTab when switching between EXPLAIN and ANALYZE
+    watch(
+      () => showAnalyzeResults.value,
+      (isAnalyze) => {
+        if (!isAnalyze) {
+          // Switching back to EXPLAIN - reset to logical tab
+          activeTab.value = "logical";
+        }
+      },
+    );
+
+    // Add ESC key listener when dialog opens
+    watch(
+      () => showDialog.value,
+      (isOpen) => {
+        if (isOpen) {
+          document.addEventListener("keydown", handleEscKey);
+        } else {
+          document.removeEventListener("keydown", handleEscKey);
+        }
+      },
+    );
+
+    return {
+      t,
+      showDialog,
+      loading,
+      error,
+      sqlQuery,
+      splitterPosition,
+      logicalPlanTree,
+      physicalPlanTree,
+      planTree,
+      summaryMetrics,
+      activeTab,
+      isAnalyzing,
+      showAnalyzeResults,
+      runAnalyze,
+      onClose,
+    };
+  },
+});
+</script>
+
+<style lang="scss" scoped>
+.query-plan-content {
+  overflow: hidden;
+}
+
+.sql-query-pane,
+.explain-results-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--o2-card-background);
+}
+
+.pane-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.75rem;
+  padding: 0 1rem;
+  background-color: var(--o2-card-bg);
+  border-bottom: 1px solid var(--o2-border-color);
+
+  &__icon {
+    color: var(--o2-text-secondary);
+  }
+
+  &__title {
+    font-size: var(--text-sm);
+    font-weight: var(--font-semibold);
+    color: var(--o2-text-heading);
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+}
+
+.sql-query-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.sql-query-text {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  margin: 0;
+  padding: 0.875rem 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: var(--o2-code-bg);
+  border: 1px solid var(--o2-border-color);
+  border-radius: 0.375rem;
+  color: var(--o2-text-code);
+  min-height: 100%;
+  box-sizing: border-box;
+
+  code {
+    font-family: inherit;
+    color: inherit;
+    background: transparent;
+    padding: 0;
+  }
+}
+
+.plan-container {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  gap: 0.75rem;
+}
+
+.plan-surface {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--o2-card-bg);
+  border: 1px solid var(--o2-border-color);
+  border-radius: 0.5rem;
+  overflow: hidden;
+
+  // Make OTabPanels and OTabPanel fill the remaining surface height
+  :deep(.o-tab-panels) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  :deep(.o-tab-panel) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__header {
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid var(--o2-border-color);
+    background-color: var(--o2-card-background);
+  }
+
+  &__title {
+    font-size: var(--text-xs);
+    font-weight: var(--font-semibold);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--o2-text-label);
+  }
+
+  &__tabs {
+    border-bottom: 1px solid var(--o2-border-color);
+    padding: 0 0.5rem;
+  }
+}
+
+.plan-scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+}
+
+.plan-empty {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--o2-text-muted);
+}
+
+.state-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+
+  &__label {
+    color: var(--o2-text-secondary);
+    font-size: var(--text-sm);
+  }
+}
+
+:deep(.query-plan-splitter) {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: var(--o2-border-color);
+    transform: translateX(-50%);
+    transition: background-color 0.2s ease, width 0.2s ease;
+  }
+
+  &:hover::before {
+    background-color: var(--o2-primary-color);
+    width: 2px;
+  }
+}
+</style>

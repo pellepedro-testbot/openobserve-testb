@@ -1,0 +1,530 @@
+// Copyright 2026 OpenObserve Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import { reactive, computed, nextTick } from "vue";
+import {
+  b64EncodeStandard,
+  b64EncodeUnicode,
+  useLocalTraceFilterField,
+} from "@/utils/zincutils";
+import { useStore } from "vuex";
+import { useRouter } from "vue-router";
+import { copyToClipboard } from "@/utils/clipboard";
+import { getSpanColorHex } from "@/utils/traces/traceColors";
+import { getOrSetServiceColor as registryGetOrSetServiceColor } from "@/utils/traces/serviceColorRegistry";
+import { quoteSqlIdentifierIfNeeded } from "@/utils/query/sqlIdentifiers";
+import { buildFieldToGroupIdMap } from "@/utils/telemetryCorrelation";
+import { SELECT_ALL_VALUE } from "@/utils/dashboard/constants";
+import { useServiceCorrelation } from "@/composables/useServiceCorrelation";
+import type { TraceSearchMode } from "@/ts/interfaces/traces/trace.types";
+const defaultObject = {
+  organizationIdentifier: "",
+  runQuery: false,
+  loading: false,
+  loadingStream: false,
+
+  config: {
+    splitterModel: 20,
+    lastSplitterPosition: 0,
+    splitterLimit: [0, 40],
+    refreshTimes: [
+      [
+        { label: "5 sec", value: 5 },
+        { label: "1 min", value: 60 },
+        { label: "1 hr", value: 3600 },
+      ],
+      [
+        { label: "10 sec", value: 10 },
+        { label: "5 min", value: 300 },
+        { label: "2 hr", value: 7200 },
+      ],
+      [
+        { label: "15 sec", value: 15 },
+        { label: "15 min", value: 900 },
+        { label: "1 day", value: 86400 },
+      ],
+      [
+        { label: "30 sec", value: 30 },
+        { label: "30 min", value: 1800 },
+      ],
+    ],
+  },
+  meta: {
+    refreshInterval: 0,
+    refreshIntervalLabel: "Off",
+    showFields: true,
+    showQuery: true,
+    showHistogram: true,
+    showDetailTab: false,
+    showTraceDetails: false,
+    sqlMode: false,
+    resultGrid: {
+      wrapCells: false,
+      manualRemoveFields: false,
+      rowsPerPage: 25,
+      showPagination: false,
+      sortBy: "start_time" as string,
+      sortOrder: "desc" as "asc" | "desc",
+      chartInterval: "1 second",
+      chartKeyFormat: "HH:mm:ss",
+      navigation: {
+        currentRowIndex: 0,
+      },
+    },
+    scrollInfo: {},
+    serviceColors: {} as any,
+    redirectedFromLogs: false,
+    searchApplied: false,
+    metricsRangeFilters: new Map<
+      string,
+      { panelTitle: string; start: number; end: number }
+    >(),
+    queryEditorPlaceholderFlag: true,
+    liveMode: localStorage.getItem("oo_toggle_auto_run") === "true",
+    searchMode: "spans" as TraceSearchMode,
+    serviceGraphVisualizationType:
+      (localStorage.getItem("serviceGraph_visualizationType") as
+        | "tree"
+        | "graph") || "tree",
+    serviceGraphLayoutType:
+      localStorage.getItem("serviceGraph_layoutType") || "horizontal",
+  },
+  data: {
+    query: "",
+    advanceFiltersQuery: "",
+    parsedQuery: {},
+    errorMsg: "",
+    errorCode: 0,
+    errorDetail: "",
+    additionalErrorMsg: "",
+    stream: {
+      streamLists: [],
+      selectedStream: { label: "", value: "" },
+      selectedStreamFields: [],
+      selectedFields: <string[]>[],
+      filterField: "",
+      addToFilter: "",
+      removeFilterField: "",
+      functions: [],
+      filters: [] as any[],
+      fieldValues: {} as {
+        [key: string | number]: {
+          isLoading: boolean;
+          values: { key: string; count: string }[];
+          selectedValues: string[];
+          size: number;
+          isOpen: boolean;
+          searchKeyword: string;
+        };
+      },
+    },
+    resultGrid: {
+      currentDateTime: new Date(),
+      currentPage: 0,
+      columns: <any>[],
+    },
+    queryPayload: <any>{},
+    transforms: <any>[],
+    queryResults: <any>[],
+    sortedQueryResults: <any>[],
+    streamResults: <any>[],
+    histogram: <any>{},
+    editorValue: "",
+    datetime: {
+      startTime: 0,
+      endTime: 0,
+      relativeTimePeriod: "15m",
+      type: "relative",
+    },
+    searchAround: {
+      indexTimestamp: 0,
+      size: <number>10,
+      histogramHide: false,
+    },
+    traceDetails: {
+      selectedTrace: null as {
+        trace_id: string;
+        trace_start_time: number;
+        trace_end_time: number;
+      } | null,
+      traceId: "",
+      spanList: [],
+      isLoadingTraceMeta: false,
+      isLoadingTraceDetails: false,
+      selectedSpanId: "" as String | null,
+      expandedSpans: [] as String[],
+      showSpanDetails: false,
+      selectedLogStreams: [] as String[],
+      correlationProps: null as any,
+    },
+  },
+};
+
+const searchObj = reactive(Object.assign({}, defaultObject));
+
+/** Default ordered column ID lists used when no localStorage entry exists. */
+export const DEFAULT_TRACE_COLUMNS: Record<"traces" | "spans", string[]> = {
+  spans: ["service_name", "operation_name", "duration", "span_status"],
+  traces: [
+    "service_name",
+    "operation_name",
+    "duration",
+    "spans",
+    "status",
+    "service_latency",
+  ],
+};
+
+const useTraces = () => {
+  const store = useStore();
+  const router = useRouter();
+
+  const { loadSemanticGroups } = useServiceCorrelation();
+
+  const resetSearchObj = () => {
+    // delete searchObj.data;
+    searchObj.data.errorMsg = "";
+    searchObj.data.errorDetail = "";
+    searchObj.data.stream.streamLists = [];
+    searchObj.data.stream.selectedStream = { label: "", value: "" };
+    searchObj.data.stream.selectedStreamFields = [];
+    searchObj.data.queryResults = {};
+    searchObj.data.sortedQueryResults = [];
+    searchObj.data.histogram = {
+      xData: [],
+      yData: [],
+      chartParams: {
+        title: "",
+        unparsed_x_data: [],
+        timezone: "",
+      },
+    };
+    searchObj.data.query = "";
+    searchObj.data.editorValue = "";
+    searchObj.meta.sqlMode = false;
+    searchObj.runQuery = false;
+    searchObj.data.traceDetails.isLoadingTraceDetails = false;
+    searchObj.data.traceDetails.isLoadingTraceMeta = false;
+  };
+
+  /**
+   * Persist the current selectedFields for the given mode.
+   * Stored as traceFilterField[orgId_stream][mode] = string[].
+   */
+  const updatedLocalLogFilterField = (
+    searchMode: "traces" | "spans" = "traces",
+  ): void => {
+    const identifier: string = searchObj.organizationIdentifier || "default";
+    const key = `${identifier}_${searchObj.data.stream.selectedStream.value}`;
+    const all: any = useLocalTraceFilterField()?.value ?? {};
+    all[key] = {
+      ...(all[key] ?? {}),
+      [searchMode]: searchObj.data.stream.selectedFields,
+    };
+    useLocalTraceFilterField(all);
+  };
+
+  /**
+   * Restore selectedFields for the given mode from localStorage.
+   * Falls back to the default ordered column list when no saved value exists.
+   */
+  const loadLocalLogFilterField = (
+    searchMode: "traces" | "spans" = "traces",
+  ): void => {
+    const identifier: string = searchObj.organizationIdentifier || "default";
+    const key = `${identifier}_${searchObj.data.stream.selectedStream.value}`;
+    const saved = useLocalTraceFilterField()?.value?.[key];
+
+    let fields = [];
+    fields = saved?.[searchMode]?.length
+      ? saved?.[searchMode]
+      : [...DEFAULT_TRACE_COLUMNS[searchMode]];
+
+    fields = fields.map((field) => {
+      if (field === "status" && searchMode === "spans") {
+        return "span_status";
+      } else {
+        return field;
+      }
+    });
+    searchObj.data.stream.selectedFields = fields;
+  };
+
+  function getUrlQueryParams(getShareLink: boolean = false) {
+    const date = searchObj.data.datetime;
+    const query: any = {};
+
+    query["stream"] = searchObj.data.stream.selectedStream.value;
+
+    if (date.type === "relative" && !getShareLink) {
+      query["period"] = date.relativeTimePeriod;
+    } else {
+      query["from"] = date.startTime;
+      query["to"] = date.endTime;
+    }
+
+    query["query"] = b64EncodeUnicode(searchObj.data.editorValue);
+
+    query["org_identifier"] = store.state.selectedOrganization.identifier;
+
+    query["trace_id"] = router.currentRoute.value.query.trace_id;
+
+    if (searchObj.meta.searchMode === "spans") {
+      query["search_mode"] = "spans";
+    }
+
+    if (router.currentRoute.value.query.span_id)
+      query["span_id"] = router.currentRoute.value.query.span_id;
+
+    return query;
+  }
+
+  const copyTracesUrl = (
+    customTimeRange: { from: string; to: string } | null = null,
+  ) => {
+    const queryParams = getUrlQueryParams(true);
+
+    if (customTimeRange) {
+      queryParams.from = customTimeRange.from;
+      queryParams.to = customTimeRange.to;
+    }
+
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(queryParams)) {
+      searchParams.append(key, value);
+    }
+    const queryString = searchParams.toString();
+
+    let shareURL = window.location.origin + window.location.pathname;
+
+    if (queryString != "") {
+      shareURL += "?" + queryString;
+    }
+
+    copyToClipboard(shareURL, {
+      successMessage: "Link Copied Successfully!",
+      errorMessage: "Error while copy link.",
+      timeout: 5000,
+    });
+  };
+
+  // Function to build query details for navigation
+  const buildQueryDetails = (span: any, isSpan: boolean = true) => {
+    const spanIdField =
+      store.state.organizationData?.organizationSettings?.span_id_field_name;
+    const traceIdField =
+      store.state.organizationData?.organizationSettings?.trace_id_field_name;
+    const traceId = searchObj.data.traceDetails.selectedTrace?.trace_id;
+
+    let query: string = isSpan
+      ? `${quoteSqlIdentifierIfNeeded(String(spanIdField))}='${span.spanId || span.span_id}' ${
+          traceId ? `AND ${quoteSqlIdentifierIfNeeded(String(traceIdField))}='${traceId}'` : ""
+        }`
+      : `${quoteSqlIdentifierIfNeeded(String(traceIdField))}='${traceId}'`;
+
+    if (query) query = b64EncodeStandard(query) as string;
+
+    return {
+      stream: searchObj.data.traceDetails.selectedLogStreams.join(","),
+      from: Math.floor(span.start_time / 1000) - 60000000,
+      to: Math.ceil(span.end_time / 1000) + 60000000,
+      refresh: 0,
+      query,
+      orgIdentifier: store.state.selectedOrganization.identifier,
+    };
+  };
+
+  // Function to navigate to logs with the provided query details
+  const navigateToLogs = async (queryDetails: any) => {
+    store.dispatch("logs/setIsInitialized", false);
+    await nextTick();
+    router.push({
+      path: "/logs",
+      query: {
+        stream_type: "logs",
+        stream: queryDetails.stream,
+        from: queryDetails.from,
+        to: queryDetails.to,
+        refresh: queryDetails.refresh,
+        sql_mode: "false",
+        query: queryDetails.query,
+        org_identifier: queryDetails.orgIdentifier,
+        show_histogram: "true",
+        type: "trace_explorer",
+        quick_mode: "false",
+      },
+    });
+  };
+
+  /**
+   * Computed property for traces share URL
+   * Generates the full shareable URL with all query parameters
+   */
+  const tracesShareURL = computed(() => {
+    const queryParams = getUrlQueryParams(true);
+
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(queryParams)) {
+      searchParams.append(key, String(value));
+    }
+    const queryString = searchParams.toString();
+
+    let shareURL = window.location.origin + window.location.pathname;
+
+    if (queryString != "") {
+      shareURL += "?" + queryString;
+    }
+
+    return shareURL;
+  });
+
+  /**
+   * Assign service colors for raw hits from either traces or spans mode.
+   * - Traces mode: service_name is an array of strings or objects with a service_name property.
+   * - Spans mode: service_name is a plain string.
+   */
+  const setServiceColors = (hits: any[]): void => {
+    hits.forEach((hit: any) => {
+      const serviceNames = Array.isArray(hit.service_name)
+        ? hit.service_name
+        : hit.service_name
+          ? [hit.service_name]
+          : [];
+      serviceNames.forEach((service: any) => {
+        const serviceName =
+          typeof service === "string" ? service : service.service_name;
+        if (serviceName && !searchObj.meta.serviceColors[serviceName]) {
+          searchObj.meta.serviceColors[serviceName] =
+            registryGetOrSetServiceColor(serviceName);
+        }
+      });
+    });
+  };
+
+  const getOrSetServiceColor = (serviceName: string): string => {
+    const color = registryGetOrSetServiceColor(serviceName);
+    if (serviceName && !searchObj.meta.serviceColors[serviceName]) {
+      searchObj.meta.serviceColors[serviceName] = color;
+    }
+    return searchObj.meta.serviceColors[serviceName] ?? color;
+  };
+
+  const formatTracesMetaData = (traces: any[]): any[] => {
+    if (!traces.length) return [];
+
+    setServiceColors(traces);
+
+    return traces.map((trace) => {
+      const _trace = {
+        trace_id: trace.trace_id,
+        trace_start_time: Math.round(trace.start_time / 1000),
+        trace_end_time: Math.round(trace.end_time / 1000),
+        service_name: trace.first_event?.service_name || "",
+        operation_name: trace.first_event?.operation_name || "",
+        spans: trace.spans?.[0] || 0,
+        errors: trace.spans?.[1] || 0,
+        duration: trace.duration || 0,
+        services: {} as Record<string, { count: number; duration: number }>,
+        zo_sql_timestamp: new Date(trace.start_time / 1000).getTime(),
+        gen_ai_usage_input_tokens: trace.gen_ai_usage_input_tokens,
+        gen_ai_usage_output_tokens: trace.gen_ai_usage_output_tokens,
+        gen_ai_usage_total_tokens: trace.gen_ai_usage_total_tokens,
+        gen_ai_usage_cost: trace.gen_ai_usage_cost,
+        gen_ai_input_messages: trace.gen_ai_input_messages,
+      };
+
+      // Build per-trace service span count and duration map
+      if (trace.service_name && Array.isArray(trace.service_name)) {
+        trace.service_name.forEach((service: any) => {
+          const serviceName =
+            typeof service === "string" ? service : service.service_name;
+          const serviceCount =
+            typeof service === "string" ? 1 : service.count || 1;
+          const serviceDuration =
+            typeof service === "string" ? 0 : service.duration || 0;
+          _trace.services[serviceName] = {
+            count: serviceCount,
+            duration: serviceDuration,
+          };
+        });
+      }
+
+      return _trace;
+    });
+  };
+
+  const navigateToCorrelatedLogs = async (correlationProps: any) => {
+    const conditions = new Map<string, string>();
+    const usedGroups = new Set<string>();
+
+    const semanticGroups = await loadSemanticGroups();
+    const fieldToGroupId = buildFieldToGroupIdMap(semanticGroups);
+
+    for (const streamInfo of correlationProps.logStreams) {
+      const filters = streamInfo.filters ?? {};
+      for (const [field, value] of Object.entries(filters)) {
+        if (!value || value === SELECT_ALL_VALUE || field.startsWith("_"))
+          continue;
+        const groupId = fieldToGroupId.get(field.toLowerCase()) ?? field;
+        if (usedGroups.has(groupId)) continue;
+        usedGroups.add(groupId);
+
+        const escapedValue = String(value).replace(/'/g, "''");
+        conditions.set(groupId, `${quoteSqlIdentifierIfNeeded(field)} = '${escapedValue}'`);
+      }
+    }
+
+    const queryString = Array.from(conditions.values()).join(" and ");
+    const encodedQuery = b64EncodeUnicode(queryString);
+    const streamNames = correlationProps.logStreams.map((s: any) => s.stream_name).join(",");
+
+    store.dispatch("logs/setIsInitialized", false);
+    await nextTick();
+
+    router.push({
+      path: "/logs",
+      query: {
+        stream: streamNames,
+        sql_mode: "false",
+        query: encodedQuery,
+        from: String(correlationProps.timeRange.startTime),
+        to: String(correlationProps.timeRange.endTime),
+        stream_type: "logs",
+        org_identifier: store.state.selectedOrganization.identifier,
+        type: "trace_explorer",
+        quick_mode: "false",
+        show_histogram: "true",
+      },
+    });
+  };
+
+  return {
+    searchObj,
+    resetSearchObj,
+    updatedLocalLogFilterField,
+    loadLocalLogFilterField,
+    getUrlQueryParams,
+    copyTracesUrl,
+    buildQueryDetails,
+    navigateToLogs,
+    navigateToCorrelatedLogs,
+    tracesShareURL,
+    formatTracesMetaData,
+    setServiceColors,
+    getOrSetServiceColor,
+  };
+};
+
+export default useTraces;

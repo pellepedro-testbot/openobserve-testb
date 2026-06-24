@@ -1,0 +1,239 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <div class="semantic-group-item tw:p-3 tw:mb-2">
+    <div class="group-layout">
+      <!-- Left Column: Display Name only (ID is internal/read-only) -->
+      <div class="left-column">
+        <div class="input-wrapper">
+          <OInput
+            data-test="semantic-group-display-input"
+            v-model="localGroup.display"
+            :label="t('common.name') + ' *'"
+            :error="!!displayError"
+            :error-message="displayError"
+            class="showLabelOnTop"
+            @update:model-value="handleDisplayChange"
+            @blur="handleDisplayBlur"
+          />
+        </div>
+        <!-- Show ID as read-only caption for existing groups -->
+        <div v-if="localGroup.id" class="tw:text-xs tw:text-gray-400">
+          {{ t("common.id") }}: {{ localGroup.id }}
+        </div>
+        <OSwitch
+          v-model="localGroup.is_workload_type"
+          :label="t('correlation.isWorkloadType')"
+          class="tw:mt-1"
+          @update:model-value="emitUpdate"
+        >
+          <OTooltip :content="t('correlation.isWorkloadTypeTooltip')" />
+        </OSwitch>
+      </div>
+
+      <!-- Right Column: Field Names spanning both rows -->
+      <div class="right-column">
+        <div class="field-names-input">
+          <TagInput
+            v-model="localGroup.fields"
+            :placeholder="t('correlation.fieldNamePlaceholder') + ' *'"
+            @update:model-value="emitUpdate"
+          />
+        </div>
+      </div>
+
+
+      <!-- Actions Column: Delete -->
+      <div class="actions-column">
+        <div class="tw:flex tw:justify-end">
+          <OButton
+            data-test="semantic-group-remove-group-btn"
+            :variant="isProtected ? 'ghost-muted' : 'ghost-destructive'"
+            size="icon-circle-sm"
+            :disabled="isProtected"
+            @click="!isProtected && emit('delete')"
+          >
+            <OIcon name="delete" size="sm" />
+            <OTooltip :content="isProtected ? t('correlation.serviceGroupProtected') : t('correlation.removeSemanticGroup')" />
+          </OButton>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script lang="ts" setup>
+import { ref, computed, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import OButton from '@/lib/core/Button/OButton.vue';
+import OTooltip from "@/lib/overlay/Tooltip/OTooltip.vue";
+import OInput from "@/lib/forms/Input/OInput.vue";
+import OSwitch from "@/lib/forms/Switch/OSwitch.vue";
+import TagInput from "./TagInput.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+
+const { t } = useI18n();
+
+interface SemanticGroup {
+  id: string;
+  display: string;
+  fields: string[];
+  group?: string;
+  is_workload_type?: boolean;
+}
+
+interface Props {
+  group: SemanticGroup;
+}
+
+const props = defineProps<Props>();
+const emit = defineEmits<{
+  (e: "update", group: SemanticGroup): void;
+  (e: "delete"): void;
+}>();
+
+const isProtected = computed(() => props.group.id === "service");
+
+const normalizeGroup = (g: SemanticGroup): SemanticGroup => ({
+  ...g,
+  is_workload_type: g.is_workload_type ?? false,
+});
+
+const localGroup = ref<SemanticGroup>(normalizeGroup(props.group));
+const displayError = ref("");
+
+watch(
+  () => props.group,
+  (newGroup) => {
+    localGroup.value = normalizeGroup(newGroup);
+  },
+  { deep: true },
+);
+
+const slugify = (s: string): string =>
+  s.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-+/g, "-").replace(/^-|-$/g, "");
+
+// Generate ID as "{category-slug}-{display-slug}" for new groups
+const generateIdFromDisplay = (display: string): string => {
+  const displaySlug = slugify(display);
+  const categorySlug = slugify(localGroup.value.group || "");
+  return categorySlug ? `${categorySlug}-${displaySlug}` : displaySlug;
+};
+
+// Handle display name change (just emit, don't generate ID yet)
+const handleDisplayChange = () => {
+  displayError.value = "";
+  emitUpdate();
+};
+
+// Handle display name blur - generate ID on focus out
+const handleDisplayBlur = () => {
+  if (!localGroup.value.display) {
+    displayError.value = t('common.name') + ' is required';
+  }
+  // Generate ID from display name if display is not empty
+  // If display is empty, keep the current ID (UUID or previous display-based ID)
+  if (localGroup.value.display) {
+    const newId = generateIdFromDisplay(localGroup.value.display);
+    // Only update if ID actually changed
+    if (localGroup.value.id !== newId) {
+      localGroup.value.id = newId;
+      emitUpdate();
+    }
+  }
+};
+
+const emitUpdate = () => {
+  emit("update", { ...localGroup.value });
+};
+</script>
+
+<style lang="scss" scoped>
+.semantic-group-item {
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  width: 100%;
+  max-width: 100%;
+  background: var(--o2-card-bg);
+  border: 1px solid var(--o2-border-color, rgba(0, 0, 0, 0.12));
+}
+
+.group-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr auto;
+  gap: 16px;
+  align-items: start;
+  width: 100%;
+  overflow: hidden;
+}
+
+.left-column {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  justify-content: center;
+}
+
+.right-column {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.field-names-input {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+
+  :deep(.tag-input-container) {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  :deep(.tag-input-wrapper) {
+    flex: 1;
+    min-height: 100px;
+    min-width: 0;
+  }
+}
+
+.actions-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 100%;
+}
+
+.text-subtitle2 {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--q-color-text-secondary);
+}
+
+@media (max-width: 768px) {
+  .group-layout {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

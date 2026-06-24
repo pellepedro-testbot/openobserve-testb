@@ -1,0 +1,291 @@
+<template>
+  <div
+    class="tw:h-[calc(100vh-3.75rem)] tw:flex tw:min-h-0"
+    :class="store.state.theme === 'dark' ? 'dark-mode' : ''"
+  >
+    <div class="common-json-editor tw:flex tw:flex-col tw:flex-1 tw:min-h-0 tw:min-w-0">
+      <div class="tw:flex tw:flex-col tw:flex-1 tw:min-h-0">
+        <query-editor
+          data-test="common-json-editor"
+          ref="queryEditorRef"
+          editor-id="common-json-editor"
+          class="monaco-editor tw:flex-1 tw:min-h-0"
+          :debounceTime="300"
+          v-model:query="jsonContent"
+          language="json"
+          @update:query="handleEditorChange"
+        />
+      </div>
+
+      <!-- Display validation errors -->
+      <div
+        v-if="validationErrors.length > 0"
+        class="tw:p-3 tw:text-red-500 validation-errors tw:shrink-0"
+      >
+        <div class="tw:font-bold tw:mb-2">Please fix the following issues:</div>
+        <ul class="tw:ml-3">
+          <li v-for="(error, index) in validationErrors" :key="index">
+            {{ error }}
+          </li>
+        </ul>
+      </div>
+
+      <div class="tw:flex tw:justify-end tw:gap-2 tw:p-3 tw:shrink-0">
+        <OButton
+          variant="outline"
+          size="sm-action"
+          @click="$emit('close')"
+          data-test="json-editor-cancel"
+        >{{ t('common.cancel') }}</OButton>
+        <OButton
+          variant="primary"
+          size="sm-action"
+          @click="saveChanges"
+          data-test="json-editor-save"
+        >{{ t('common.save') }}</OButton>
+      </div>
+    </div>
+    <!-- o2aichat enabled -->
+    <div
+      v-if="store.state.isAiChatEnabled"
+      class="tw:ml-2 tw:w-[25vw] tw:h-full"
+      :class="store.state.theme == 'dark' ? 'dark-mode-chat-container' : 'light-mode-chat-container'"
+    >
+      <O2AIChat
+        class="tw:h-full"
+        :is-open="store.state.isAiChatEnabled"
+        @close="store.state.isAiChatEnabled = false"
+      />
+    </div>
+  </div>
+</template>
+
+<script lang="ts">
+import { defineComponent, ref, onMounted, watch, computed, defineAsyncComponent } from "vue";
+import { useI18n } from "vue-i18n";
+import { useStore } from "vuex";
+import { getImageURL } from "@/utils/zincutils";
+import O2AIChat from "../O2AIChat.vue";
+import config from "@/aws-exports";
+import { ChatMessage, ChatHistoryEntry } from "@/ts/interfaces/chat";
+import useDragAndDrop from "@/plugins/pipelines/useDnD";
+import OButton from "@/lib/core/Button/OButton.vue";
+
+export default defineComponent({
+  name: "JsonEditor",
+  components: {
+    QueryEditor: defineAsyncComponent(() => import('@/components/CodeQueryEditor.vue')),
+    O2AIChat,
+    OButton,
+  },
+  props: {
+    data: {
+      type: Object,
+      required: true,
+    },
+    title: {
+      type: String,
+      required: true,
+    },
+    type: {
+      type: String,
+      required: true,
+    },
+    validationErrors: {
+      type: Array,
+      required: false,
+      default: () => [],
+    },
+    isEditing: {
+      type: Boolean,
+      required: false,
+      default: false,
+    }
+  },
+  emits: ["close", "saveJson"],
+  setup(props, { emit }) {
+    const { t } = useI18n();
+    const store = useStore();
+    const jsonContent = ref("");
+    const isValidJson = ref(true);
+    const queryEditorRef = ref();
+    const { pipelineObj } = useDragAndDrop();
+    const validationErrors = ref<any[]>(props.validationErrors || []);
+    const storedFields = ref<any>({});
+
+    // Define protected fields based on type
+    const getProtectedFields = (type: string) => {
+      switch (type) {
+        case 'pipelines':
+          return ['pipeline_id', 'org', 'name'];
+        case 'alerts':
+          const baseFields = ['id', 'name', 'org_id', 'last_triggered_at', 'last_satisfied_at', 'owner', 'last_edited_by', 'createdAt', 'updatedAt'];
+          // If editing an existing alert, also protect stream-related fields
+          if (props.isEditing) {
+            return [...baseFields, 'stream_name', 'stream_type', 'is_real_time'];
+          }
+          return baseFields;
+        // Add more cases for other types
+        default:
+          return [];
+      }
+    };
+
+    const protectedFields = computed(() => getProtectedFields(props.type));
+
+    const handleEditorChange = (value: string) => {
+      try {
+        const newContent = JSON.parse(value);
+        const protectedFieldChanges: string[] = [];
+
+        // Check for changes in protected fields
+        protectedFields.value.forEach(field => {
+          if (storedFields.value[field] && newContent[field] !== storedFields.value[field]) {
+            protectedFieldChanges.push(field);
+          }
+        });
+
+        if (protectedFieldChanges.length > 0) {
+          // Add validation errors for changed protected fields
+          validationErrors.value = [
+            ...validationErrors.value.filter(err => !err.startsWith('Cannot modify')),
+            ...protectedFieldChanges.map(field => `Cannot modify ${field} field directly , will be reverted to the original value`)
+          ];
+
+          // Revert the changes by restoring protected fields
+          const revertedContent = {
+            ...newContent,
+            ...storedFields.value
+          };
+          
+          // Update the editor content with reverted changes
+          jsonContent.value = JSON.stringify(revertedContent, null, 2);
+          return;
+        }
+
+        // If no protected fields were changed, update content normally
+        jsonContent.value = value;
+        
+        // Clear any previous protected field validation errors
+        validationErrors.value = validationErrors.value.filter(err => !err.startsWith('Cannot modify'));
+      } catch (error) {
+        validationErrors.value = ['Invalid JSON format'];
+      }
+    };
+
+    onMounted(() => {
+      // Store initial values of protected fields based on type
+      protectedFields.value.forEach(field => {
+        if (props.data[field]) {
+          storedFields.value[field] = props.data[field];
+        }
+      });
+
+      jsonContent.value = JSON.stringify(props.data, null, 2);
+    });
+    //whenever user clicks on save button , we need to save the changes
+    //we need to merge the stored fields with the parsed content
+    //and then emit the saveJson event
+
+      const saveChanges = () => {
+        try {
+          const parsedContent = JSON.parse(jsonContent.value);
+          // Merge back the stored fields
+          const finalContent = {
+            ...parsedContent,
+            ...storedFields.value
+          };
+          
+          emit("saveJson", JSON.stringify(finalContent));
+        } catch (error) {
+          console.log(error, 'error')
+          validationErrors.value = ['Invalid JSON format'];
+        }
+      };
+
+      watch(
+        () => props.data,
+        (newVal) => {
+          // Update stored fields based on type
+          protectedFields.value.forEach(field => {
+            storedFields.value[field] = newVal[field] || storedFields.value[field];
+          });
+
+          // Show complete data in editor
+          jsonContent.value = JSON.stringify(newVal, null, 2);
+        },
+      );
+      //whenever any errors happens at the time of validating the pipeline , 
+      //we need to show the errors in the json editor
+      //so we need to watch the validationErrors array
+      watch(
+        () => props.validationErrors,
+        (newErrors) => {
+          validationErrors.value = newErrors;
+        },
+        { immediate: true, deep: true }
+      );
+      const toggleAIChat = () => {
+      const isEnabled = !store.state.isAiChatEnabled;
+      store.dispatch("setIsAiChatEnabled", isEnabled);
+    }
+      const isHovered = ref(false);
+      const getBtnLogo = computed(() => {
+      if (isHovered.value || store.state.isAiChatEnabled) {
+        return getImageURL('images/common/ai_icon_dark.svg')
+      }
+
+      return store.state.theme === 'dark'
+        ? getImageURL('images/common/ai_icon_dark.svg')
+        : getImageURL('images/common/ai_icon_gradient.svg')
+    })
+
+    return {
+      t,
+      store,
+      jsonContent,
+      isValidJson,
+      validationErrors,
+      queryEditorRef,
+      handleEditorChange,
+      getImageURL,
+      saveChanges,
+      config,
+      toggleAIChat,
+      isHovered,
+      getBtnLogo,
+      protectedFields,
+      storedFields,
+    };
+  },
+});
+</script>
+
+<style lang="scss" scoped>
+.common-json-editor {
+  display: flex;
+  flex-direction: column;
+
+  .dark-mode {
+    background-color: $dark-page;
+  }
+
+  :deep(.monaco-editor) {
+    height: 100%;
+  }
+
+  :deep(.q-card__section) {
+    padding-left: 8px;
+    padding-right: 0;
+  }
+
+  .validation-errors {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .no-border {
+    border: none !important;
+  }
+}
+</style>

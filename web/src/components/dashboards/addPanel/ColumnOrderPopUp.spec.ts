@@ -1,0 +1,735 @@
+// Copyright 2026 OpenObserve Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
+import { mount, flushPromises } from "@vue/test-utils";
+import ColumnOrderPopUp from "./ColumnOrderPopUp.vue";
+import i18n from "@/locales";
+import store from "@/test/unit/helpers/store";
+
+
+// Stub ODialog so tests are deterministic (no Portal/Reka teleport).
+// Exposes the same props/emits surface used by ColumnOrderPopUp.
+const ODialogStub = {
+  name: "ODialog",
+  props: [
+    "open",
+    "size",
+    "title",
+    "subTitle",
+    "persistent",
+    "showClose",
+    "width",
+    "primaryButtonLabel",
+    "secondaryButtonLabel",
+    "neutralButtonLabel",
+    "primaryButtonVariant",
+    "secondaryButtonVariant",
+    "neutralButtonVariant",
+    "primaryButtonDisabled",
+    "secondaryButtonDisabled",
+    "neutralButtonDisabled",
+    "primaryButtonLoading",
+    "secondaryButtonLoading",
+    "neutralButtonLoading",
+  ],
+  emits: ["update:open", "click:primary", "click:secondary", "click:neutral"],
+  template: `
+    <div
+      data-test="o-dialog-stub"
+      :data-open="String(open)"
+      :data-size="size"
+      :data-title="title"
+      :data-primary-label="primaryButtonLabel"
+      :data-secondary-label="secondaryButtonLabel"
+    >
+      <span data-test="o-dialog-stub-title">{{ title }}</span>
+      <slot name="header" />
+      <slot />
+      <slot name="footer" />
+      <button
+        data-test="o-dialog-stub-primary"
+        @click="$emit('click:primary')"
+      >{{ primaryButtonLabel }}</button>
+      <button
+        data-test="o-dialog-stub-secondary"
+        @click="$emit('click:secondary')"
+      >{{ secondaryButtonLabel }}</button>
+    </div>
+  `,
+};
+
+describe("ColumnOrderPopUp", () => {
+  let wrapper: any;
+
+  const defaultProps = {
+    open: true,
+    columnOrder: [] as string[],
+    availableColumns: [] as string[],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    if (wrapper) {
+      wrapper.unmount();
+    }
+  });
+
+  const createWrapper = (props = {}) => {
+    return mount(ColumnOrderPopUp, {
+      props: {
+        ...defaultProps,
+        ...props,
+      },
+      global: {
+        plugins: [i18n, store],
+        stubs: {
+          ODialog: ODialogStub,
+        },
+        mocks: {
+          $t: (key: string) => key,
+        },
+      },
+    });
+  };
+
+  describe("Component Rendering", () => {
+    it("should render the ODialog wrapper", () => {
+      wrapper = createWrapper();
+
+      const dialog = wrapper.findComponent(ODialogStub);
+      expect(dialog.exists()).toBe(true);
+    });
+
+    it("should pass dashboard.columnOrder title to ODialog", () => {
+      wrapper = createWrapper();
+
+      const dialog = wrapper.findComponent(ODialogStub);
+      expect(dialog.props("title")).toContain("Column Order");
+    });
+
+    it("should pass primary and secondary button labels to ODialog", () => {
+      wrapper = createWrapper();
+
+      const dialog = wrapper.findComponent(ODialogStub);
+      expect(dialog.props("primaryButtonLabel")).toContain("Save");
+      expect(dialog.props("secondaryButtonLabel")).toContain("Cancel");
+    });
+
+    it("should render the description text", () => {
+      wrapper = createWrapper();
+
+      expect(wrapper.text()).toContain("Customize the display order of columns");
+    });
+
+    it("should forward open prop to ODialog", () => {
+      wrapper = createWrapper({ open: true });
+
+      const dialog = wrapper.findComponent(ODialogStub);
+      expect(dialog.props("open")).toBe(true);
+    });
+
+    it("should forward open=false to ODialog", () => {
+      wrapper = createWrapper({ open: false });
+
+      const dialog = wrapper.findComponent(ODialogStub);
+      expect(dialog.props("open")).toBe(false);
+    });
+
+    it("should use lg size on ODialog", () => {
+      wrapper = createWrapper();
+
+      const dialog = wrapper.findComponent(ODialogStub);
+      expect(dialog.props("size")).toBe("lg");
+    });
+  });
+
+  describe("Empty State", () => {
+    it("should show empty state when no columns are provided", () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: [],
+      });
+
+      expect(wrapper.text()).toContain("No columns ordered");
+      expect(wrapper.text()).toContain(
+        "Columns will be displayed in their default order",
+      );
+      expect(wrapper.findComponent({ name: "OIcon" }).exists()).toBe(true);
+    });
+
+    it("should not show draggable list in empty state", () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: [],
+      });
+
+      expect(
+        wrapper.find('[data-test="dashboard-column-order-drag"]').exists(),
+      ).toBe(false);
+    });
+  });
+
+  describe("Column Initialization", () => {
+    it("should initialize with provided columnOrder when available", async () => {
+      wrapper = createWrapper({
+        columnOrder: ["column1", "column2"],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual([
+        "column1",
+        "column2",
+        "column3",
+      ]);
+    });
+
+    it("should initialize with availableColumns in natural order when columnOrder is empty", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["zebra", "apple", "banana"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual(["zebra", "apple", "banana"]);
+    });
+
+    it("should filter out columns not in availableColumns", async () => {
+      wrapper = createWrapper({
+        columnOrder: ["column1", "column2", "column4"],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual([
+        "column1",
+        "column2",
+        "column3",
+      ]);
+      expect(wrapper.vm.editColumnOrder).not.toContain("column4");
+    });
+
+    it("should add remaining columns in natural order after ordered columns", async () => {
+      wrapper = createWrapper({
+        columnOrder: ["column2"],
+        availableColumns: ["column2", "column1", "column3"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual([
+        "column2",
+        "column1",
+        "column3",
+      ]);
+    });
+  });
+
+  describe("Column Order Display", () => {
+    it("should render all columns in the list", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.text()).toContain("column1");
+      expect(wrapper.text()).toContain("column2");
+      expect(wrapper.text()).toContain("column3");
+    });
+
+    it("should render column numbers correctly", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.text()).toContain("1.");
+      expect(wrapper.text()).toContain("2.");
+    });
+
+    it("should render drag handles for each column", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      // Assert each indexed drag handle exists individually to avoid matching
+      // child elements rendered inside OIcon which also carry the data-test value.
+      expect(
+        wrapper.find('[data-test="column-order-drag-handle-0"]').exists(),
+      ).toBe(true);
+      expect(
+        wrapper.find('[data-test="column-order-drag-handle-1"]').exists(),
+      ).toBe(true);
+    });
+
+    it("should render move up/down buttons for each column", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      const moveUpButtons = wrapper.findAll('[data-test^="column-order-move-up"]');
+      const moveDownButtons = wrapper.findAll('[data-test^="column-order-move-down"]');
+
+      expect(moveUpButtons.length).toBe(2);
+      expect(moveDownButtons.length).toBe(2);
+    });
+  });
+
+  describe("Move Column Up", () => {
+    it("should move column up when move up button is clicked", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      // Initially: column1, column2, column3
+      expect(wrapper.vm.editColumnOrder[1]).toBe("column2");
+
+      // Click move up button for column2 (index 1)
+      wrapper.vm.moveColumnUp(1);
+      await flushPromises();
+
+      // Now should be: column2, column1, column3
+      expect(wrapper.vm.editColumnOrder[0]).toBe("column2");
+      expect(wrapper.vm.editColumnOrder[1]).toBe("column1");
+    });
+
+    it("should not move first column up", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      const initialOrder = [...wrapper.vm.editColumnOrder];
+
+      // Try to move first column up
+      wrapper.vm.moveColumnUp(0);
+      await flushPromises();
+
+      // Order should remain the same
+      expect(wrapper.vm.editColumnOrder).toEqual(initialOrder);
+    });
+
+    it("should disable move up button for first column", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      const firstMoveUpButton = wrapper.find('[data-test="column-order-move-up-0"]');
+      expect((firstMoveUpButton.element as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  describe("Move Column Down", () => {
+    it("should move column down when move down button is clicked", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      // Initially: column1, column2, column3
+      expect(wrapper.vm.editColumnOrder[0]).toBe("column1");
+
+      // Click move down button for column1 (index 0)
+      wrapper.vm.moveColumnDown(0);
+      await flushPromises();
+
+      // Now should be: column2, column1, column3
+      expect(wrapper.vm.editColumnOrder[0]).toBe("column2");
+      expect(wrapper.vm.editColumnOrder[1]).toBe("column1");
+    });
+
+    it("should not move last column down", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      const initialOrder = [...wrapper.vm.editColumnOrder];
+
+      // Try to move last column down
+      wrapper.vm.moveColumnDown(1);
+      await flushPromises();
+
+      // Order should remain the same
+      expect(wrapper.vm.editColumnOrder).toEqual(initialOrder);
+    });
+
+    it("should disable move down button for last column", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      const lastMoveDownButton = wrapper.find('[data-test="column-order-move-down-1"]');
+      expect((lastMoveDownButton.element as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  describe("Draggable Functionality", () => {
+    it("should render draggable component when columns exist", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      expect(
+        wrapper.find('[data-test="dashboard-column-order-drag"]').exists(),
+      ).toBe(true);
+    });
+
+    it("should have correct drag options", () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1"],
+      });
+
+      expect(wrapper.vm.dragOptions).toEqual({
+        animation: 200,
+        handle: ".drag-handle",
+        ghostClass: "ghost",
+      });
+    });
+
+    it("should update editColumnOrder when draggable model changes", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      // Simulate drag and drop by directly updating the model
+      wrapper.vm.editColumnOrder = ["column3", "column1", "column2"];
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual([
+        "column3",
+        "column1",
+        "column2",
+      ]);
+    });
+  });
+
+  describe("Cancel Functionality", () => {
+    it("should emit cancel event when ODialog emits click:secondary", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1"],
+      });
+
+      await wrapper.findComponent(ODialogStub).vm.$emit("click:secondary");
+      await flushPromises();
+
+      expect(wrapper.emitted()).toHaveProperty("cancel");
+      expect(wrapper.emitted("cancel")).toHaveLength(1);
+    });
+
+    it("should emit cancel event when ODialog emits update:open with false", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1"],
+      });
+
+      await wrapper.findComponent(ODialogStub).vm.$emit("update:open", false);
+      await flushPromises();
+
+      expect(wrapper.emitted()).toHaveProperty("cancel");
+      expect(wrapper.emitted("cancel")).toHaveLength(1);
+    });
+
+    it("should not emit cancel when ODialog emits update:open with true", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1"],
+      });
+
+      await wrapper.findComponent(ODialogStub).vm.$emit("update:open", true);
+      await flushPromises();
+
+      expect(wrapper.emitted("cancel")).toBeUndefined();
+    });
+
+    it("should not modify original columnOrder on cancel", async () => {
+      const originalOrder = ["column1", "column2"];
+      wrapper = createWrapper({
+        columnOrder: originalOrder,
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      // Modify the edit order
+      wrapper.vm.moveColumnDown(0);
+      await flushPromises();
+
+      // Cancel via ODialog secondary button
+      await wrapper.findComponent(ODialogStub).vm.$emit("click:secondary");
+      await flushPromises();
+
+      // Original should not be modified
+      expect(originalOrder).toEqual(["column1", "column2"]);
+    });
+  });
+
+  describe("Save Functionality", () => {
+    it("should emit save event with edited column order when ODialog emits click:primary", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      await wrapper.findComponent(ODialogStub).vm.$emit("click:primary");
+      await flushPromises();
+
+      expect(wrapper.emitted()).toHaveProperty("save");
+      expect(wrapper.emitted("save")).toHaveLength(1);
+      expect(wrapper.emitted("save")[0]).toEqual([["column1", "column2"]]);
+    });
+
+    it("should emit save with modified order after moves", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      // Move column2 up
+      wrapper.vm.moveColumnUp(1);
+      await flushPromises();
+
+      await wrapper.findComponent(ODialogStub).vm.$emit("click:primary");
+      await flushPromises();
+
+      const savedOrder = wrapper.emitted("save")[0][0];
+      expect(savedOrder[0]).toBe("column2");
+      expect(savedOrder[1]).toBe("column1");
+    });
+
+    it("should emit save with empty array when no columns", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: [],
+      });
+
+      await flushPromises();
+
+      await wrapper.findComponent(ODialogStub).vm.$emit("click:primary");
+      await flushPromises();
+
+      expect(wrapper.emitted("save")[0]).toEqual([[]]);
+    });
+  });
+
+  describe("Props Changes", () => {
+    it("should re-initialize when availableColumns prop changes", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+      expect(wrapper.vm.editColumnOrder).toEqual(["column1", "column2"]);
+
+      // Update availableColumns prop
+      await wrapper.setProps({
+        availableColumns: ["column1", "column2", "column3"],
+      });
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual([
+        "column1",
+        "column2",
+        "column3",
+      ]);
+    });
+
+    it("should maintain columnOrder priority after availableColumns change", async () => {
+      wrapper = createWrapper({
+        columnOrder: ["column2", "column1"],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+      expect(wrapper.vm.editColumnOrder[0]).toBe("column2");
+
+      // Update availableColumns to add column3
+      await wrapper.setProps({
+        availableColumns: ["column1", "column2", "column3"],
+      });
+      await flushPromises();
+
+      // column2 should still be first, then column1, then column3
+      expect(wrapper.vm.editColumnOrder[0]).toBe("column2");
+      expect(wrapper.vm.editColumnOrder[1]).toBe("column1");
+      expect(wrapper.vm.editColumnOrder[2]).toBe("column3");
+    });
+  });
+
+  describe("UI Styling and Classes", () => {
+    it("should render column rows with correct structure", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1"],
+      });
+
+      await flushPromises();
+
+      const columnRow = wrapper.find('[data-test="column-order-row-0"]');
+      expect(columnRow.exists()).toBe(true);
+      expect(columnRow.find('[data-test="dashboard-column-order-drag-handle"]').exists()).toBe(true);
+      expect(columnRow.find('[data-test="dashboard-column-order-column-number"]').exists()).toBe(true);
+      expect(columnRow.find('[data-test="dashboard-column-order-column-name"]').exists()).toBe(true);
+      expect(columnRow.find('[data-test="dashboard-column-order-column-actions"]').exists()).toBe(true);
+    });
+
+    it("should have tooltips on move buttons", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      const tooltips = wrapper.findAllComponents({ name: "OTooltip" });
+      expect(tooltips.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Edge Cases", () => {
+    it("should handle single column", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual(["column1"]);
+
+      // Move up button should be disabled
+      const moveUpBtn = wrapper.find('[data-test="column-order-move-up-0"]');
+      expect((moveUpBtn.element as HTMLButtonElement).disabled).toBe(true);
+
+      // Move down button should be disabled
+      const moveDownBtn = wrapper.find('[data-test="column-order-move-down-0"]');
+      expect((moveDownBtn.element as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("should handle columnOrder with duplicates gracefully", async () => {
+      wrapper = createWrapper({
+        columnOrder: ["column1", "column1", "column2"],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      // The component uses the columnOrder as-is when filtering
+      // Since both column1's are in availableColumns, both are kept initially
+      // But when combined with remaining columns, duplicates naturally resolve
+      expect(wrapper.vm.editColumnOrder.includes("column1")).toBe(true);
+      expect(wrapper.vm.editColumnOrder.includes("column2")).toBe(true);
+    });
+
+    it("should handle empty columnOrder with populated availableColumns", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["zebra", "apple", "banana"],
+      });
+
+      await flushPromises();
+
+      // Should keep natural order from availableColumns
+      expect(wrapper.vm.editColumnOrder).toEqual(["zebra", "apple", "banana"]);
+    });
+
+    it("should handle columnOrder with all columns in different order", async () => {
+      wrapper = createWrapper({
+        columnOrder: ["column3", "column1", "column2"],
+        availableColumns: ["column1", "column2", "column3"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.vm.editColumnOrder).toEqual([
+        "column3",
+        "column1",
+        "column2",
+      ]);
+    });
+  });
+
+  describe("Accessibility", () => {
+    it("should have proper data-test attributes for testing", async () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1", "column2"],
+      });
+
+      await flushPromises();
+
+      expect(wrapper.findComponent(ODialogStub).exists()).toBe(true);
+      expect(
+        wrapper.find('[data-test="dashboard-column-order-drag"]').exists(),
+      ).toBe(true);
+    });
+
+    it("should expose Save and Cancel button labels via ODialog props", () => {
+      wrapper = createWrapper({
+        columnOrder: [],
+        availableColumns: ["column1"],
+      });
+
+      const dialog = wrapper.findComponent(ODialogStub);
+      expect(dialog.props("primaryButtonLabel")).toContain("Save");
+      expect(dialog.props("secondaryButtonLabel")).toContain("Cancel");
+    });
+  });
+});

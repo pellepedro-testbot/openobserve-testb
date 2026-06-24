@@ -1,0 +1,510 @@
+/* ============================================================
+   DARK MODE TOKEN OVERRIDES
+   Overrides semantic (and component) tokens for dark themes.
+   ============================================================ */
+
+:root.dark,
+.dark :root,
+.dark {
+    /*
+     * Tell the browser to render native UI (date/time/color picker icons,
+     * scrollbars, autofill backgrounds, etc.) in dark theme. Without this,
+     * Chromium's default ::-webkit-calendar-picker-indicator stays dark
+     * gray and disappears against the dark input background. This is
+     * inherited by every descendant, so a single declaration on the dark
+     * root flips every native widget at once.
+     */
+    color-scheme: dark;
+
+    /* ═══════════════════════════════════════════════════════════
+       DARK MODE FOUNDATION — tune these ~16 values to taste.
+       Everything below (surfaces, borders, text, and the per-component
+       overrides further down) references ONLY these vars, so the whole
+       dark theme is tuned from here without touching components.
+
+       Elevation order (deepest → lightest), preserving the light-mode
+       relationship (subtle < panel < base < overlay) so cards LIFT and
+       sub-rails RECEDE — that's what creates visible "sections":
+
+         chrome   top bar / left rail / gutter behind the card  (deepest)
+         well     recessed fills, segmented-control track
+         panel    folder & sub rails, cards, table-header base
+         base     THE content card + table canvas               (main, lifted)
+         overlay  menus, dialogs, inputs, table-header, tooltips (highest)
+
+       Two rules that must survive any tuning:
+        1. BASE (the content card) is clearly LIGHTER than the chrome behind
+           it, so the card visibly floats off the frame.
+        2. Borders read clearly ABOVE the surface they outline — a border
+           close to its background is invisible (the bug this fixes).
+
+       Accents stay on the teal brand palette (--color-primary-*), which is
+       theme-driven at runtime (utils/theme.ts) — no accent is hardcoded here.
+       Surfaces are a neutral slate. Want warmer/cooler? Nudge the hex below.
+       ═══════════════════════════════════════════════════════════ */
+
+    /* Surfaces — VS Code Dark+ exact values.
+       chrome  = title bar + activity bar (icon strip)   #333333
+       panel   = sidebar / folder list                   #252526
+       base    = editor / main content canvas            #1E1E1E
+       well    = recessed / segmented track              #2D2D2D
+       overlay = menus, dropdowns, tooltips              #202020 */
+    --d-chrome:    #0E0F11;  /* title bar + left activity-bar strip             */
+    --d-base:      #0d1117;  /* MAIN: content card + table canvas               */
+    --d-well:      #2D2D2D;  /* recessed wells, segmented-control track         */
+    --d-panel:     #181818;  /* folder sidebar, sub rails, cards, dialogs (DM)  */
+    --d-overlay:   #202020;  /* menus, dropdowns, tooltips, table-header (top tier,
+                                lifts above panel #181818 via border + shadow)   */
+
+    /* Borders & dividers — VS Code widget / panel borders */
+    --d-divider:       #3C3C3C;  /* subtle: row & section separators            */
+    --d-border:        #454545;  /* default: card / input / table / rail edges  */
+    --d-border-strong: #6B6B6B;  /* strong: checkbox / radio / file outlines    */
+
+    /* Text — VS Code editor foreground scale */
+    --d-text:      #D4D4D4;  /* primary text, headings, record names            */
+    --d-text-2:    #AAAAAA;  /* secondary: body, nav, labels                    */
+    --d-text-3:    #858585;  /* metadata, captions, column heads, IDs           */
+
+    /* Row / item states on the content surface */
+    --d-hover:     var(--color-primary-900);  /* row & list-item hover — MATCHES
+                             the dashboard-folder hover (theme-tinted, not grey) */
+    --d-selected:  color-mix(in srgb, var(--color-primary-500) 30%, var(--d-panel));
+                             /* selected row — teal-tinted (brand signal)       */
+    --d-zebra:     #252526;  /* striped-row bg — VS Code list alternating row    */
+
+    /* --- Text (mapped to the foundation) --- */
+    --color-text-heading:     var(--d-text);   /* h1-h6, modal titles */
+    --color-text-primary:     var(--d-text);   /* alias for heading */
+    --color-text-soft:        var(--d-text);   /* feeds --color-select-text (OSelect trigger value). Soft variant: var(--d-text-2) */
+    --color-text-body:        var(--d-text-2); /* paragraphs, default body */
+    --color-text-secondary:   var(--d-text-2); /* supporting text, descriptions */
+    --color-text-caption:     var(--d-text-3); /* captions, footnotes, timestamps */
+    --color-text-label:       var(--d-text-3); /* form labels, metadata */
+    --color-text-muted:       var(--d-text-3); /* disabled, de-emphasized */
+    --color-text-disabled:    var(--d-text-3);
+    --color-text-placeholder: var(--d-text-3); /* input placeholders */
+    --color-text-link:        var(--color-primary-400);  /* clickable links (teal) */
+    --color-text-link-hover:  var(--color-primary-300);  /* link hover state (teal) */
+    --color-text-code:        var(--d-text-2);           /* inline code, monospace */
+    --color-text-inverse:     var(--color-grey-900);     /* text on light/colored bg */
+
+    /* --- Surfaces (mapped — elevation order preserved from light mode) --- */
+    --color-surface-base:         var(--d-base);    /* content card + table canvas (lifted) */
+    --color-surface-panel:        var(--d-panel);   /* folder rails, cards, table-header base */
+    --color-surface-overlay:      var(--d-overlay); /* dropdowns, dialogs, selects, popovers */
+    --color-surface-subtle:       var(--d-well);    /* recessed fills, segmented track */
+    --color-surface-subtle-hover: var(--d-panel);   /* hover on a recessed fill (one step up) */
+    --color-surface-chrome:        var(--d-chrome);  /* top bar + left rail */
+    --color-surface-chrome-deeper: var(--d-chrome);  /* gutter behind card (same frame) */
+
+    /* --- Borders (mapped — solid, clearly visible) --- */
+    --color-border-default: var(--d-border);
+    --color-border-strong:  var(--d-border-strong);
+    /* Soft divider — one step quieter than border-default so row/section
+       splits don't read as hard structural lines (but still visible). */
+    --color-border-subtle:  var(--d-divider);
+
+    /* ---- Button overrides ---- */
+
+    /* secondary (darkened surface) */
+    --o2-secondary-btn-bg: var(--color-surface-overlay);
+    --o2-secondary-btn-text: var(--color-text-primary);
+    --o2-secondary-btn-border: var(--color-border-subtle, rgba(255,255,255,0.12));
+    --color-button-secondary: var(--o2-secondary-btn-bg);
+    --color-button-secondary-hover: var(--color-primary-900);
+    --color-button-secondary-active: var(--color-primary-800);
+    --color-button-secondary-disabled: var(--color-surface-overlay);
+    --color-button-secondary-foreground: var(--o2-secondary-btn-text);
+
+    /* outline */
+    --color-button-outline-text: var(--color-text-primary);
+    --color-button-outline-border: var(--color-border-default);
+    --color-button-outline-hover-bg: var(--color-primary-900);
+    --color-button-outline-hover-border: var(--color-border-strong);
+    --color-button-outline-active-bg: var(--color-primary-800);
+
+    /* ghost */
+    --color-button-ghost-text: var(--color-text-primary);
+    --color-button-ghost-hover-bg: var(--color-primary-900);
+    --color-button-ghost-active-bg: var(--color-primary-800);
+
+    /* ghost-primary */
+    --color-button-ghost-primary-text: var(--color-primary-400);
+    --color-button-ghost-primary-hover-bg: var(--color-primary-900);
+    --color-button-ghost-primary-active-bg: var(--color-primary-800);
+
+    /* ghost-destructive */
+    --color-button-ghost-destructive-text: var(--color-error-400);
+    --color-button-ghost-destructive-hover-bg: var(--color-surface-overlay);
+    --color-button-ghost-destructive-active-bg: var(--color-surface-overlay);
+
+    /* ghost-muted */
+    --color-button-ghost-muted-hover-text: var(--color-primary-400);
+    --color-button-ghost-muted-hover-bg: var(--color-primary-900);
+    --color-button-ghost-muted-active-bg: var(--color-primary-800);
+
+    /* ghost-subtle */
+    --color-button-ghost-subtle-hover-bg: var(--color-primary-900);
+    --color-button-ghost-subtle-active-bg: var(--color-primary-800);
+
+    /* destructive */
+    --color-button-destructive-focus-ring: var(--color-error-300);
+
+    /* ButtonGroup ΓÇö divider inherits from border-default override above */
+
+    /* Dropdown */
+    --color-dropdown-item-hover-bg: var(--color-primary-900);
+    --color-dropdown-item-active-bg: var(--color-primary-800);
+    --color-dropdown-item-destructive-text: var(--color-error-400);
+    --color-dropdown-item-destructive-hover-bg: var(--color-surface-overlay);
+
+    /* Tooltip */
+    --color-tooltip-bg: var(--d-overlay);
+    --color-tooltip-text: var(--d-text);
+    --color-tooltip-border: var(--d-border);
+    --color-tooltip-arrow: var(--d-overlay);
+
+    /* ToggleGroup */
+    --color-toggle-item-hover-bg: var(--color-primary-950);
+    --color-toggle-item-active-bg: var(--color-primary-900);
+    --color-toggle-item-active-text: var(--color-white);
+
+    /* Tabs */
+    --color-tabs-active-bg: var(--color-primary-800);
+    --color-tabs-active-text: var(--color-white);
+    --color-tabs-hover-bg: var(--color-primary-900);
+    --color-tabs-bar-border: var(--color-grey-700);
+
+    /* Collapsible */
+    --color-collapsible-trigger-hover-bg: var(--color-primary-900);
+    --color-collapsible-trigger-active-bg: var(--color-primary-800);
+
+    /* OFieldList / OFieldRow / OFieldLabel */
+    --color-field-list-row-hover-bg:   var(--color-primary-900);
+    --color-field-list-actions-bg:     var(--color-surface-subtle);
+    --color-field-list-expansion-bg:   var(--color-surface-subtle);
+
+    /* Badge — tokens that change on dark backgrounds */
+    /* default: brighten bg for contrast against dark panel backgrounds (grey-700 blends into grey-900) */
+    --color-badge-default-solid-bg: var(--color-grey-500);
+    --color-badge-default-solid-text: var(--color-grey-100);
+    --color-badge-default-ol-border: var(--color-grey-500);
+    --color-badge-default-ol-text: var(--color-grey-300);
+    --color-badge-default-soft-bg: var(--color-grey-800);
+    --color-badge-default-soft-text: var(--color-grey-300);
+
+    /* primary: brighten solid bg in dark mode — primary-600 on primary-800 (active tab) has near-zero contrast */
+    --color-badge-primary-solid-bg: var(--color-primary-400);
+    --color-badge-primary-ol-text: var(--color-primary-300);
+    --color-badge-primary-soft-bg: var(--color-primary-900);
+    --color-badge-primary-soft-text: var(--color-primary-300);
+
+    /* success: solid unchanged; outline text brightened (700 too dark on dark bg) */
+    --color-badge-success-ol-text: var(--color-success-500);
+    --color-badge-success-soft-bg: color-mix(in srgb, var(--color-success-500) 15%, transparent);
+    --color-badge-success-soft-text: var(--color-success-500);
+
+    /* warning: solid unchanged (yellow + dark text works on any bg); outline brightened */
+    --color-badge-warning-ol-border: var(--color-warning-400);
+    --color-badge-warning-ol-text: var(--color-warning-400);
+    --color-badge-warning-soft-bg: color-mix(in srgb, var(--color-warning-400) 15%, transparent);
+    --color-badge-warning-soft-text: var(--color-warning-400);
+
+    /* error: solid unchanged; outline brightened */
+    --color-badge-error-ol-border: var(--color-error-400);
+    --color-badge-error-ol-text: var(--color-error-400);
+    --color-badge-error-soft-bg: color-mix(in srgb, var(--color-error-400) 15%, transparent);
+    --color-badge-error-soft-text: var(--color-error-400);
+
+    /* info (blue): brighten for dark bg */
+    --color-badge-info-ol-border: var(--color-info-200);
+    --color-badge-info-ol-text:   var(--color-info-200);
+
+    /* purple: brighten for dark bg */
+    --color-badge-purple-ol-border: var(--color-purple-400);
+    --color-badge-purple-ol-text:   var(--color-purple-400);
+
+    /* teal: brighten solid bg and outline for dark mode */
+    --color-badge-teal-solid-bg: var(--color-teal-400);
+    --color-badge-teal-ol-text: var(--color-teal-300);
+    --color-badge-teal-soft-bg: color-mix(in srgb, var(--color-teal-400) 15%, transparent);
+    --color-badge-teal-soft-text: var(--color-teal-400);
+
+    /* orange: brighten solid bg and outline for dark mode */
+    --color-badge-orange-solid-bg: var(--color-orange-400);
+    --color-badge-orange-ol-text: var(--color-orange-300);
+    --color-badge-orange-soft-bg: color-mix(in srgb, var(--color-orange-400) 15%, transparent);
+    --color-badge-orange-soft-text: var(--color-orange-400);
+
+    /* lime: brighten solid bg and outline for dark mode */
+    --color-badge-lime-solid-bg: var(--color-lime-400);
+    --color-badge-lime-ol-text: var(--color-lime-300);
+    --color-badge-lime-soft-bg: color-mix(in srgb, var(--color-lime-400) 15%, transparent);
+    --color-badge-lime-soft-text: var(--color-lime-400);
+
+    /* amber: brighten solid bg and outline for dark mode */
+    --color-badge-amber-solid-bg: var(--color-amber-400);
+    --color-badge-amber-ol-text: var(--color-amber-300);
+    --color-badge-amber-soft-bg: color-mix(in srgb, var(--color-amber-400) 15%, transparent);
+    --color-badge-amber-soft-text: var(--color-amber-400);
+
+    /* cyan: brighten solid bg and outline for dark mode */
+    --color-badge-cyan-solid-bg: var(--color-cyan-400);
+    --color-badge-cyan-ol-text: var(--color-cyan-300);
+    --color-badge-cyan-soft-bg: color-mix(in srgb, var(--color-cyan-400) 15%, transparent);
+    --color-badge-cyan-soft-text: var(--color-cyan-400);
+
+    /* blue: brighten solid bg and outline for dark mode */
+    --color-badge-blue-solid-bg: var(--color-blue-400);
+    --color-badge-blue-ol-text: var(--color-blue-300);
+    --color-badge-blue-soft-bg: color-mix(in srgb, var(--color-blue-400) 15%, transparent);
+    --color-badge-blue-soft-text: var(--color-blue-400);
+
+    /* purple (solid/soft variants): brighten for dark mode */
+    --color-badge-purple-solid-bg: var(--color-purple-400);
+    --color-badge-purple-soft-bg: color-mix(in srgb, var(--color-purple-400) 15%, transparent);
+    --color-badge-purple-soft-text: var(--color-purple-400);
+
+    /* indigo: brighten solid bg and outline for dark mode */
+    --color-badge-indigo-solid-bg: var(--color-indigo-400);
+    --color-badge-indigo-ol-text: var(--color-indigo-300);
+    --color-badge-indigo-soft-bg: color-mix(in srgb, var(--color-indigo-400) 15%, transparent);
+    --color-badge-indigo-soft-text: var(--color-indigo-400);
+
+    /* Button — ghost-warning / outline-warning (bright yellow for readability on dark bg) */
+    --color-button-ghost-warning-text: var(--color-warning-400);
+    --color-button-outline-warning-text: var(--color-warning-400);
+    --color-button-outline-warning-border: var(--color-warning-500);
+
+    /* RefreshButton — staleness dot (slightly muted in dark mode) */
+    --color-refresh-dot-stale: var(--color-warning-500);
+    --color-refresh-dot-critical: var(--color-error-400);
+
+    /* Input (OInput, OTextarea) — bg matches the surface the field sits on
+       (border-only, like light mode where input-bg = surface-base) rather than
+       a distinct lighter gray; disabled-bg uses --d-well so disabled fields
+       still read as a clearly different, inert surface. */
+    --color-input-bg: var(--color-surface-base);
+    --color-input-border: var(--color-border-default);
+    --color-input-disabled-bg: var(--d-well);
+    --color-input-disabled-text: var(--color-text-secondary);
+    --color-input-placeholder: var(--color-text-disabled);
+    --color-input-error-text: var(--color-error-400);
+    --color-input-border-error: var(--color-error-400);
+
+    /* Select (OSelect) — same surface-matching bg + disabled strategy as input. */
+    --color-select-bg: var(--color-surface-base);
+    --color-select-border: var(--color-border-default);
+    --color-select-disabled-bg: var(--d-well);
+    --color-select-disabled-text: var(--color-text-secondary);
+    --color-select-placeholder: var(--color-text-disabled);
+    --color-select-error-text: var(--color-error-400);
+    --color-select-border-error: var(--color-error-400);
+    --color-select-content-bg: var(--color-surface-overlay);
+    --color-select-content-border: var(--color-border-default);
+    --color-select-item-hover-bg: var(--color-primary-900);
+    --color-select-item-selected-bg: var(--color-primary-800);
+    --color-select-item-selected-text: var(--color-primary-200);
+    --color-select-item-disabled: var(--color-text-disabled);
+
+    /* Switch (OSwitch) — same off-vs-on-vs-disabled differentiation as light
+       mode. OFF uses primary outline + primary thumb (interactive signal).
+       ON gets a primary-filled track + white thumb (handled in the Vue
+       template). DISABLED stays grey + dashed so it's clearly distinct
+       from both OFF and ON. */
+    --color-switch-border: var(--color-primary-500);
+    --color-switch-border-off: var(--color-primary-500);
+    --color-switch-thumb-off: var(--color-primary-500);
+    --color-switch-thumb-on: var(--color-primary-500);
+    --color-switch-disabled-border: var(--color-grey-600);
+    --color-switch-disabled-thumb: var(--color-grey-600);
+
+    /* Checkbox (OCheckbox) */
+    --color-checkbox-bg: var(--color-surface-panel);
+    --color-checkbox-border: var(--color-border-strong);
+    --color-checkbox-checked-bg: var(--color-primary-500);
+    --color-checkbox-checked-border: var(--color-primary-500);
+    --color-checkbox-disabled-bg: var(--color-surface-subtle);
+    --color-checkbox-disabled-border: var(--color-border-default);
+
+    /* Radio (ORadio) — same rationale as switch: primary outline by default
+       (signals interactivity), grey only when disabled. */
+    --color-radio-bg: var(--color-surface-panel);
+    --color-radio-border: var(--color-primary-500);
+    --color-radio-checked-border: var(--color-primary-500);
+    --color-radio-checked-dot: var(--color-primary-500);
+    --color-radio-disabled-bg: var(--color-surface-subtle);
+    --color-radio-disabled-border: var(--color-grey-600);
+
+    /* Slider (OSlider) */
+    --color-slider-track: var(--color-grey-700);
+    --color-slider-track-fill: var(--color-primary-500);
+    --color-slider-thumb: var(--color-primary-500);
+    --color-slider-thumb-border: var(--color-surface-panel);
+    --color-slider-disabled-track: var(--color-grey-800);
+    --color-slider-disabled-track-fill: var(--color-grey-700);
+    --color-slider-disabled-thumb: var(--color-grey-600);
+
+    /* File (OFile) */
+    --color-file-bg: var(--color-surface-panel);
+    --color-file-border: var(--color-border-strong);
+    --color-file-disabled-bg: var(--color-surface-subtle);
+    --color-file-disabled-border: var(--color-border-default);
+    --color-file-error-border: var(--color-error-400);
+    --color-file-chip-bg: var(--color-primary-900);
+    --color-file-chip-text: var(--color-primary-200);
+    --color-file-chip-remove: var(--color-primary-200);
+    --color-file-drag-bg: var(--color-primary-950);
+    --color-file-drag-border: var(--color-primary-400);
+
+    /* Date / Time / Color (ODate, OTime, OColor) */
+    --color-datepicker-bg: var(--color-surface-panel);
+    --color-datepicker-border: var(--color-border-strong);
+    --color-datepicker-disabled-bg: var(--color-surface-subtle);
+    --color-datepicker-disabled-border: var(--color-border-default);
+    --color-datepicker-error-border: var(--color-error-400);
+    --color-datepicker-segment-focus-bg: var(--color-primary-500);
+    --color-datepicker-segment-focus-text: var(--color-white);
+    /* DatePicker calendar popup */
+    --color-datepicker-popup-bg: var(--color-surface-overlay);
+    --color-datepicker-popup-border: var(--color-border-default);
+    --color-datepicker-day-hover-bg: var(--color-primary-900);
+    --color-datepicker-day-selected-bg: var(--color-primary-500);
+    --color-datepicker-day-today-border: var(--color-primary-400);
+    --color-datepicker-day-outside-text: var(--color-text-disabled);
+    --color-datepicker-nav-hover-bg: var(--color-primary-900);
+    --color-datepicker-day-range-bg: var(--color-primary-900);
+    --color-datepicker-day-range-text: var(--color-primary-200);
+    --color-datepicker-clock-face-bg: var(--color-surface-panel);
+    --color-datepicker-clock-header-bg: var(--color-primary-800);
+    --color-datepicker-clock-selected-bg: var(--color-primary-500);
+    --color-datepicker-clock-hover-bg: var(--color-primary-900);
+    --color-datepicker-relative-btn-bg: var(--color-surface-panel);
+    --color-datepicker-relative-btn-selected-bg: var(--color-primary-500);
+    --color-datepicker-relative-btn-hover-bg: var(--color-primary-900);
+
+    /* Color picker */
+    --color-colorpicker-popup-bg: var(--color-surface-overlay);
+    --color-colorpicker-popup-border: var(--color-border-default);
+
+    /* Dialog */
+    --color-dialog-overlay: color-mix(in srgb, var(--d-chrome) 80%, transparent);
+    /* Body matches the normal content canvas (so inputs sit flush like on a
+       page); header + footer take the folder-rail surface so they read as a
+       slightly lifted frame around the content. Shared by ODialog + ODrawer. */
+    --color-dialog-bg: var(--color-surface-base);
+    --color-dialog-border: var(--d-border);
+    --color-dialog-header-bg: var(--color-surface-panel);
+    --color-dialog-header-text: var(--d-text);
+    --color-dialog-header-border: var(--d-border);
+    --color-dialog-content-text: var(--d-text);
+    --color-dialog-footer-bg: var(--color-surface-panel);
+    --color-dialog-footer-border: var(--d-border);
+    --color-dialog-close-text: var(--d-text-3);
+    --color-dialog-close-hover-bg: var(--d-divider);
+    --color-dialog-close-active-bg: var(--d-border);
+
+    /* Pagination */
+    --color-pagination-item-active-bg: var(--color-primary-500);
+
+    /* Timeline */
+    --color-timeline-dot-primary: var(--color-primary-500);
+    --color-timeline-dot-destructive: var(--color-error-500);
+    --color-timeline-dot-info: var(--color-primary-400);
+    --color-timeline-dot-muted: var(--color-grey-500);
+
+    /* Stepper */
+    --color-stepper-indicator-active: var(--color-primary-500);
+    --color-stepper-indicator-done: var(--color-primary-500);
+    --color-stepper-connector-done: var(--color-primary-700);
+    --color-stepper-trigger-hover: var(--color-surface-subtle-hover);
+
+    /* Spinner */
+    --color-spinner: var(--color-primary-400);
+    --color-spinner-track: var(--color-primary-800);
+
+    /* InnerLoading */
+    --color-inner-loading-overlay: color-mix(in srgb, var(--color-grey-950) 70%, transparent);
+    --color-inner-loading-label: var(--color-text-secondary);
+
+    /* Skeleton */
+    --color-skeleton-base: var(--color-grey-700);
+    --color-skeleton-highlight: var(--color-grey-600);
+    --color-skeleton-shimmer: rgba(255, 255, 255, 0.07);
+    /* Datepicker inner border — quieter on dark surfaces */
+    --color-datepicker-inner-border: var(--color-grey-600);
+
+    /* ProgressBar */
+    --color-progress-bar-default: var(--color-primary-500);
+    --color-progress-bar-warning: var(--color-warning-400);
+    --color-progress-bar-danger: var(--color-error-500);
+    --color-progress-bar-track: var(--color-grey-700);
+
+    /* Banner (OBanner) */
+    --color-banner-default-bg:     var(--color-grey-800);
+    --color-banner-default-text:   var(--color-grey-200);
+    --color-banner-info-bg:        color-mix(in srgb, var(--color-info-800) 20%, transparent);
+    --color-banner-info-border:    var(--color-info-700);
+    --color-banner-info-text:      var(--color-info-100);
+    --color-banner-success-bg:     color-mix(in srgb, var(--color-success-900) 20%, transparent);
+    --color-banner-success-border: var(--color-success-700);
+    --color-banner-success-text:   var(--color-success-100);
+    --color-banner-warning-bg:     color-mix(in srgb, var(--color-warning-900) 20%, transparent);
+    --color-banner-warning-border: var(--color-warning-600);
+    --color-banner-warning-text:   var(--color-warning-100);
+    --color-banner-error-bg:       var(--color-error-700);
+    --color-banner-error-text:     var(--color-grey-0);
+
+    /* Note Container */
+    --color-note-bg:               color-mix(in srgb, var(--color-warning-900) 15%, transparent);
+    --color-note-border:           var(--color-note-dark-border);
+    --color-note-text:             var(--color-note-dark-text);
+    --color-note-highlight:        var(--color-note-highlight-dark);
+    --color-note-emphasis:         var(--color-grey-300);
+    --color-note-code:             var(--color-note-code-dark);
+}
+
+/* ToggleGroup — primary variant dark overrides */
+.dark [data-variant="primary"] {
+    --color-toggle-track-bg: var(--color-primary-900);
+    --color-toggle-border: var(--color-primary-700);
+    --color-toggle-item-hover-bg: var(--color-primary-950);
+    --color-toggle-item-active-bg: var(--color-primary-800);
+    --color-toggle-item-active-text: var(--color-primary-200);
+}
+
+/* ── Toast (dark) ───────────────────────────────────────── */
+.dark {
+    --color-toast-success-bg:     color-mix(in srgb, var(--color-success-700) 25%, var(--color-grey-900));
+    --color-toast-success-border: var(--color-success-700);
+    --color-toast-success-icon:   var(--color-success-500);
+
+    --color-toast-error-bg:       color-mix(in srgb, var(--color-error-700) 25%, var(--color-grey-900));
+    --color-toast-error-border:   var(--color-error-600);
+    --color-toast-error-icon:     var(--color-error-400);
+
+    --color-toast-warning-bg:     color-mix(in srgb, var(--color-warning-700) 20%, var(--color-grey-900));
+    --color-toast-warning-border: var(--color-warning-500);
+    --color-toast-warning-icon:   var(--color-warning-400);
+
+    --color-toast-info-bg:        color-mix(in srgb, var(--color-primary-800) 40%, var(--color-grey-900));
+    --color-toast-info-border:    var(--color-primary-700);
+    --color-toast-info-icon:      var(--color-primary-400);
+
+    --color-toast-loading-bg:     var(--color-surface-overlay);
+    --color-toast-loading-border: var(--color-border-default);
+    --color-toast-action-text:    var(--color-primary-400);
+    --color-toast-action-hover:   var(--color-primary-300);
+
+    /* ── OTable (dark) — pulled onto the elevation ladder ─── */
+    --color-table-header-bg: var(--d-overlay);          /* header band lifts off rows */
+    --color-table-row-hover-bg: var(--d-hover);        /* neutral hover (not teal-washed) */
+    --color-table-row-selected-bg: var(--d-selected);  /* teal-tinted selection */
+    --color-table-row-striped-bg: var(--d-zebra);      /* panel +1 step zebra */
+    --color-table-row-divider: var(--d-divider);       /* solid, visible row separators */
+    --color-table-highlight-bg: color-mix(in srgb, var(--color-warning-700) 40%, transparent);
+    --color-table-sort-icon-active: var(--color-primary-400);
+    --color-table-streaming-bar: var(--color-primary-400);
+    --color-table-row-expanded-bg: var(--d-overlay);
+}

@@ -1,0 +1,106 @@
+import { test, expect } from '@playwright/test';
+import PageManager from '../../pages/page-manager.js';
+import logsdata from '../../../test-data/logs_data.json';
+import { getHeaders, getIngestionUrl, sendRequest } from '../../utils/apiUtils.js';
+const testLogger = require('../utils/test-logger.js');
+const path = require('path');
+
+// Use stored authentication state from global setup instead of logging in each test
+const authFile = path.join(__dirname, '../utils/auth/user.json');
+
+test.describe('Pipeline Dynamic Stream Names', { tag: ['@all', '@pipelines', '@pipelinesDynamic'] }, () => {
+
+  let page;
+  let context;
+  let pageManager;
+
+  test.beforeAll(async ({ browser }) => {
+    context = await browser.newContext({ storageState: authFile });
+    page = await context.newPage();
+    pageManager = new PageManager(page);
+
+    // Navigate to base URL so the UI is loaded (required for storageState auth)
+    await page.goto(`${process.env.ZO_BASE_URL}/web/?org_identifier=${process.env.ORGNAME}`);
+    await page.waitForLoadState('networkidle').catch(() => {});
+  });
+
+  test.beforeEach(async () => {
+    // Ensure page is still open
+    if (page.isClosed()) {
+      throw new Error('Page was closed unexpectedly');
+    }
+
+    // Ingestion - happens before each test
+    const orgId = process.env["ORGNAME"];
+    const streamNames = ["e2e_automate", "e2e_automate1", "e2e_automate2", "e2e_automate3"];
+    const headers = getHeaders();
+
+    for(const streamName of streamNames) {
+      const url = getIngestionUrl(orgId, streamName);
+      const response = await sendRequest(page, url, logsdata, headers);
+      testLogger.debug('API response received', { response });
+    }
+    await pageManager.apiCleanup.cleanupPipelines(streamNames).catch((err) => {
+      testLogger.warn('Pipeline cleanup before test failed (continuing)', { error: err?.message });
+    });
+  });
+
+  test.afterEach(async () => {
+    // Add a small wait after each test to ensure operations are complete
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+  });
+
+  test.afterAll(async () => {
+    // Add a wait before closing to ensure all operations are complete
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    if (!page.isClosed()) {
+      await page.close();
+    }
+    await context.close();
+  });
+
+  test('Verify pipeline with dynamic destination name using kubernetes_container_name', async () => {
+    // Navigate to stream and pipeline
+    await pageManager.pipelinesPage.exploreStreamAndNavigateToPipeline('e2e_automate1');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    
+    // Setup source stream
+    await pageManager.pipelinesPage.setupPipelineWithSourceStream('e2e_automate1');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    
+    // Setup container name condition
+    await pageManager.pipelinesPage.setupContainerNameCondition();
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    
+    // Setup destination stream
+    await pageManager.pipelinesPage.setupDestinationStream('dynamic_ziox_dynamic');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    
+    // Create and verify pipeline
+    await pageManager.pipelinesPage.createAndVerifyPipeline('dynamic_ziox_dynamic', 'e2e_automate1');
+  });
+
+  test('Verify pipeline with dynamic destination name using kubernetes_container_name with underscores', async () => {
+    await pageManager.pipelinesPage.exploreStreamAndNavigateToPipeline('e2e_automate2');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.setupPipelineWithSourceStream('e2e_automate2');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.setupContainerNameCondition();
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.setupDestinationStream('dynamic_ziox_dynamic');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.createAndVerifyPipeline('dynamic_ziox_dynamic', 'e2e_automate2');
+  });
+
+  test('Verify pipeline with dynamic destination name using kubernetes_container_name directly', async () => {
+    await pageManager.pipelinesPage.exploreStreamAndNavigateToPipeline('e2e_automate3');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.setupPipelineWithSourceStream('e2e_automate3');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.setupContainerNameCondition();
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.setupDestinationStream('ziox');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    await pageManager.pipelinesPage.createAndVerifyPipeline('ziox', 'e2e_automate3');
+  });
+}); 

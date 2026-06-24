@@ -1,0 +1,444 @@
+﻿<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <ODrawer data-test="scheduled-dashboards-drawer"
+    :open="open"
+    :width="60"
+    :title="t('dashboard.scheduledDashboards')"
+    @update:open="emit('update:open', $event)"
+  >
+    <template #header-right>
+      <div class="tw:flex tw:items-center tw:justify-end tw:gap-2">
+        <div class="app-tabs-container tw:h-[36px]">
+          <AppTabs
+            class="tabs-selection-container"
+            :tabs="scheduledReportTypeTabs"
+            v-model:active-tab="scheduledActiveTab"
+          />
+        </div>
+
+        <OSearchInput
+          data-test="alert-list-search-input"
+          v-model="scheduledFilterQuery"
+          :placeholder="t('reports.search')"
+        />
+
+        <OButton
+          variant="primary"
+          size="sm"
+          data-test="alert-list-add-alert-btn"
+          @click="createScheduledReport"
+          >{{ t("dashboard.newReport") }}</OButton
+        >
+      </div>
+    </template>
+
+    <div
+      data-test="scheduled-dashboards-container"
+      class="scheduled-dashboards"
+      :class="store.state.theme === 'dark' ? 'dark-mode' : 'tw:bg-white'"
+    >
+    <OTable
+      data-test="scheduled-dashboard-table"
+      :data="displayReports"
+      :columns="columns"
+      row-key="id"
+      pagination="client"
+      :page-size="selectedPerPage"
+      :page-size-options="perPageOptionsList"
+      :show-global-filter="false"
+      :default-columns="false"
+      :loading="loading"
+      style="width: 100%"
+    >
+      <template #cell-name="{ row }">
+        <span class="tw:cursor-pointer" @click="openReport(row)">{{ row.name }}</span>
+      </template>
+
+      <template #cell-tab="{ row }">
+        <span class="tw:cursor-pointer" @click="openReport(row)">{{ row.tab }}</span>
+      </template>
+
+      <template #cell-time_range="{ row }">
+        <span class="tw:cursor-pointer" @click="openReport(row)">{{ row.time_range }}</span>
+      </template>
+
+      <template #cell-frequency="{ row }">
+        <span class="tw:cursor-pointer" @click="openReport(row)">{{ row.frequency }}</span>
+      </template>
+
+      <template #cell-last_triggered_at="{ row }">
+        <span class="tw:cursor-pointer" @click="openReport(row)">{{ row.last_triggered_at }}</span>
+      </template>
+
+      <template #cell-created_at="{ row }">
+        <span class="tw:cursor-pointer" @click="openReport(row)">{{ row.created_at }}</span>
+      </template>
+
+      <template #empty>
+        <NoData
+          :filtered="!!scheduledFilterQuery"
+          @action="scheduledFilterQuery = ''"
+        />
+      </template>
+    </OTable>
+    </div>
+  </ODrawer>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
+import { ScheduledDashboardReport } from "@/ts/interfaces/report";
+import NoData from "@/components/shared/grid/NoData.vue";
+import { convertUnixToQuasarFormat } from "@/utils/date";
+import { useStore } from "vuex";
+import { getImageURL } from "@/utils/zincutils";
+import ODrawer from "@/lib/overlay/Drawer/ODrawer.vue";
+import OButton from "@/lib/core/Button/OButton.vue";
+import OSearchInput from "@/lib/forms/SearchInput/OSearchInput.vue";
+import OSpinner from "@/lib/feedback/Spinner/OSpinner.vue";
+import AppTabs from "@/components/common/AppTabs.vue";
+import OTable from "@/lib/core/Table/OTable.vue";
+import type { OTableColumnDef } from "@/lib/core/Table/OTable.types";
+import { TABLE_INDEX_COL_SIZE, COL } from "@/lib/core/Table/OTable.types";
+
+const props = defineProps({
+  open: {
+    type: Boolean,
+    default: false,
+  },
+  reports: {
+    type: Array,
+    required: true,
+  },
+  loading: {
+    type: Boolean,
+    required: true,
+  },
+  folderId: {
+    type: String,
+    required: true,
+  },
+  dashboardId: {
+    type: String,
+    required: true,
+  },
+  tabId: {
+    type: String,
+    required: true,
+  },
+  tabs: {
+    type: Array,
+    required: true,
+  },
+});
+
+const emit = defineEmits<{
+  "update:open": [value: boolean];
+}>();
+
+const { t } = useI18n();
+
+const router = useRouter();
+
+const scheduledFilterQuery = ref("");
+const scheduledActiveTab = ref("cached");
+const scheduledReportTypeTabs = reactive([
+  { label: t("reports.cached"), value: "cached", icon: "database" },
+  { label: t("reports.scheduled"), value: "shared", icon: "schedule" },
+]);
+
+const createScheduledReport = () => {
+  router.push({
+    name: "createReport",
+    query: {
+      folderId: props.folderId,
+      dashboardId: props.dashboardId,
+      tabId: props.tabId,
+      type: "cached",
+    },
+  });
+};
+
+const scheduledReports = ref<ScheduledDashboardReport[]>(
+  props.reports as ScheduledDashboardReport[],
+);
+
+const formattedReports = ref<ScheduledDashboardReport[]>([]);
+
+const store = useStore();
+
+watch(
+  () => props.reports,
+  () => {
+    formatReports();
+  },
+  {
+    deep: true,
+  },
+);
+
+watch(
+  scheduledActiveTab,
+  () => {
+    filterReports();
+  },
+);
+//this makes sure that reports are formatted when the component is mounted
+//because sometimes watcher might not be triggered if the props are already set
+onMounted(() => {
+  formatReports();
+});
+
+const formatReports = () => {
+  props.reports.length > 0 &&
+    props.reports.forEach((report: any, index) => {
+      scheduledReports.value.push({
+        "#": index + 1,
+        name: report.name,
+        tab: getTabName(report.dashboards?.[0]?.tabs?.[0]),
+        time_range: getTimeRangeValue(report.dashboards?.[0]?.timerange),
+        frequency: getFrequencyValue(report.frequency),
+        last_triggered_at: report.last_triggered_at
+          ? convertUnixToQuasarFormat(report.last_triggered_at)
+          : "-",
+        created_at: convertUnixToQuasarFormat(report.created_at),
+        orgId: report.org_id,
+        isCached: !report?.destinations?.length,
+      });
+    });
+
+  filterReports();
+};
+
+const getTabName = (tabId: string) => {
+  const tab = props.tabs.find((tab: any) => tab.tabId === tabId) as any;
+  return tab?.name;
+};
+
+const filterReports = () => {
+  // filter reports based on the selected tab
+  // If reports are cached, show only cached reports
+  if (scheduledActiveTab.value === "cached") {
+    formattedReports.value = (
+      scheduledReports.value as ScheduledDashboardReport[]
+    ).filter((report) => report.isCached);
+  } else {
+    formattedReports.value = (
+      scheduledReports.value as ScheduledDashboardReport[]
+    ).filter((report) => !report.isCached);
+  }
+
+  formattedReports.value = formattedReports.value.map(
+    (report: any, index: number) => {
+      return {
+        ...report,
+        "#": index + 1,
+      };
+    },
+  );
+};
+
+const columns: OTableColumnDef[] = [
+  {
+    id: "#",
+    header: "#",
+    accessorKey: "#",
+    meta: { align: "left" },
+    size: TABLE_INDEX_COL_SIZE,
+  },
+  {
+    id: "name",
+    header: t("reports.name"),
+    accessorKey: "name",
+    sortable: true,
+    size: COL.name,
+    meta: { align: "left", autoWidth: true },
+  },
+  {
+    id: "tab",
+    header: t("reports.tab"),
+    accessorKey: "tab",
+    sortable: true,
+    size: COL.streamName,
+    meta: { align: "left" },
+  },
+  {
+    id: "time_range",
+    header: t("reports.timeRange"),
+    accessorKey: "time_range",
+    sortable: true,
+    size: COL.date,
+    meta: { align: "left" },
+  },
+  {
+    id: "frequency",
+    header: t("reports.frequency"),
+    accessorKey: "frequency",
+    sortable: true,
+    size: COL.frequency,
+    meta: { align: "left" },
+  },
+  {
+    id: "last_triggered_at",
+    header: t("reports.lastTriggeredAt"),
+    accessorKey: "last_triggered_at",
+    sortable: false,
+    size: COL.date,
+    meta: { align: "left" },
+  },
+  {
+    id: "created_at",
+    header: t("reports.createdAt"),
+    accessorKey: "created_at",
+    sortable: false,
+    size: COL.createdAt,
+    meta: { align: "left" },
+  },
+];
+
+const selectedPerPage = ref(20);
+
+const perPageOptionsList = [5, 10, 20, 50, 100];
+
+const resultTotal = ref(0);
+
+const displayReports = computed(() => {
+  let reports = formattedReports.value;
+  if (scheduledFilterQuery.value) {
+    const query = scheduledFilterQuery.value.toLowerCase();
+    reports = reports.filter((row: any) =>
+      Object.values(row).some((v) =>
+        String(v).toLowerCase().includes(query),
+      ),
+    );
+  }
+  resultTotal.value = reports.length;
+  return reports;
+});
+
+const openReport = (row: any) => {
+  router.push({
+    name: "createReport",
+    query: {
+      name: row.name,
+      org_identifier: row.orgId,
+    },
+  });
+};
+
+const getFrequencyValue = (frequency: any) => {
+  if (frequency.type === "cron") {
+    return `Cron ${frequency.cron}`;
+  } else {
+    switch (frequency.type) {
+      case "once":
+        return `Once`;
+      case "hours":
+        return `Every ${frequency.interval > 1 ? frequency.interval : ""} ${
+          frequency.interval > 1 ? "Hours" : "Hour"
+        }`;
+      case "weeks":
+        return `Every ${frequency.interval > 1 ? frequency.interval : ""} ${
+          frequency.interval > 1 ? "Weeks" : "Week"
+        }`;
+      case "months":
+        return `Every ${frequency.interval > 1 ? frequency.interval : ""} ${
+          frequency.interval > 1 ? "Months" : "Month"
+        }`;
+      case "days":
+        return `Every ${frequency.interval > 1 ? frequency.interval : ""} ${
+          frequency.interval > 1 ? "Days" : "Day"
+        }`;
+      default:
+        return "";
+    }
+  }
+};
+
+const getTimeRangeValue = (dateTime: any) => {
+  if (dateTime.type === "relative") {
+    return `Past ${dateTime.period}`;
+  } else {
+    const startDateTime = convertUnixToQuasarFormat(dateTime.from);
+    const endDateTime = convertUnixToQuasarFormat(dateTime.to);
+    return `${startDateTime} - ${endDateTime}`;
+  }
+};
+</script>
+
+<style lang="scss" scoped>
+.dark-mode {
+  background-color: $dark-page;
+
+  &.scheduled-dashboards {
+    height: fit-content;
+
+    :deep(.rum-tabs) {
+      border: 1px solid #464646;
+    }
+
+    :deep(.rum-tab) {
+      &:hover {
+        background: #464646;
+      }
+
+      &.active {
+        background: #5960b2;
+        color: #ffffff !important;
+      }
+    }
+  }
+}
+
+.scheduled-dashboards {
+  height: fit-content;
+
+  :deep(.q-table__top) {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  :deep(thead tr) {
+    background-color: var(--o2-table-header-bg) !important;
+  }
+
+  :deep(.rum-tabs) {
+    border: 1px solid #eaeaea;
+    height: fit-content;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  :deep(.rum-tab) {
+    width: fit-content !important;
+    padding: 4px 12px !important;
+    border: none !important;
+
+    &:hover {
+      background: #eaeaea;
+    }
+
+    &.active {
+      background: #5960b2;
+      color: #ffffff !important;
+    }
+  }
+}
+</style>

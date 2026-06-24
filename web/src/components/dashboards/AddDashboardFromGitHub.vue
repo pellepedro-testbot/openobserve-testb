@@ -1,0 +1,612 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <ODrawer data-test="add-dashboard-from-github-drawer"
+    v-model:open="show"
+    side="right"
+    size="lg"
+    title="Add Dashboard from Gallery"
+    secondary-button-label="Cancel"
+    :primary-button-label="`Next (${selectedDashboards.length})`"
+    :primary-button-disabled="selectedDashboards.length === 0"
+    @click:secondary="show = false"
+    @click:primary="handleNext"
+  >
+        <!-- Loading State -->
+        <div
+          v-if="loading"
+          class="tw:flex tw:flex-1 tw:items-center tw:justify-center"
+        >
+          <OSpinner size="lg" />
+        </div>
+
+        <!-- Error State -->
+        <div
+          v-else-if="error"
+          class="tw:flex tw:flex-1 tw:flex-col tw:items-center tw:justify-center tw:text-center"
+        >
+          <OIcon
+            name="error-outline"
+            class="tw:mb-2" style="width: 3em; height: 3em;" />
+          <div class="tw:text-red-500">{{ error }}</div>
+          <OButton
+            variant="primary"
+            size="sm"
+            class="tw:mt-4"
+            @click="loadDashboards"
+            >Retry</OButton
+          >
+        </div>
+
+        <!-- Dashboard List -->
+        <div v-else class="tw:flex tw:flex-col tw:mx-2 tw:my-2">
+          <OSearchInput
+            v-model="searchQuery"
+            placeholder="Search dashboards..."
+            clearable
+            class="tw:mb-3"
+            data-test="add-dashboard-github-search"
+          />
+
+          <div class="tw:text-xs tw:text-gray-500 tw:mb-2 tw:px-1">
+            {{ filteredDashboards.length }} dashboard(s) available
+          </div>
+
+          <ul
+            class="dashboard-list tw:my-2 tw:flex tw:flex-col tw:rounded"
+            :class="filteredDashboards.length > 0 ? 'tw:border tw:border-border' : ''"
+          >
+            <li
+              v-for="dashboard in filteredDashboards"
+              :key="dashboard.name"
+              @click="toggleDashboard(dashboard)"
+              class="tw:flex tw:items-center tw:gap-2 tw:px-3 tw:py-1 tw:cursor-pointer tw:transition-colors tw:duration-200 tw:border-l-4"
+              :class="[
+                isSelected(dashboard)
+                  ? 'selected-item tw:bg-primary/5 tw:border-primary'
+                  : 'tw:border-transparent hover:tw:bg-gray-50',
+              ]"
+              data-test="add-dashboard-github-item"
+            >
+              <div class="tw:shrink-0 tw:pr-2">
+                <OCheckbox
+                  :model-value="isSelected(dashboard)"
+                  @update:model-value="toggleDashboard(dashboard)"
+                />
+              </div>
+              <div class="tw:flex tw:flex-col tw:flex-1 tw:min-w-0">
+                <span class="tw:text-sm tw:font-medium">
+                  {{ dashboard.displayName }}
+                </span>
+                <span
+                  v-if="dashboard.description"
+                  class="tw:block tw:text-xs tw:text-muted-foreground"
+                >
+                  {{ dashboard.description }}
+                </span>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+    <!-- Folder Selection Dialog -->
+    <ODialog data-test="add-dashboard-from-github-folder-selection-dialog"
+      v-model:open="showFolderSelection"
+      persistent
+      size="sm"
+      title="Select Destination Folder"
+      secondary-button-label="Back"
+      primary-button-label="Add Dashboard"
+      :primary-button-disabled="!selectedFolderObj"
+      :primary-button-loading="importing"
+      @click:secondary="showFolderSelection = false"
+      @click:primary="confirmAdd"
+    >
+      <div class="tw:flex tw:items-end tw:gap-2">
+        <OSelect
+          v-model="selectedFolderObj"
+          :options="folderOptions"
+          label="Folder"
+          class="tw:grow"
+          data-test="add-dashboard-github-folder-select"
+        />
+        <div style="width: 40px; margin-bottom: 2px">
+          <OButton
+            variant="outline"
+            size="icon-xs"
+            icon-left="add"
+            @click="showAddFolderDialog = true"
+            data-test="add-dashboard-github-add-folder"
+            title="Add New Folder"
+          />
+        </div>
+      </div>
+    </ODialog>
+
+    <!-- Add Folder Dialog -->
+    <ODialog
+      v-model:open="showAddFolderDialog"
+      size="sm"
+      title="Add New Folder"
+      primary-button-label="Save"
+      secondary-button-label="Cancel"
+      form-id="add-folder-dashboards-form"
+      @click:secondary="showAddFolderDialog = false"
+      data-test="add-dashboard-github-add-folder-dialog"
+    >
+      <AddFolder
+        ref="addFolderRef"
+        @update:modelValue="updateFolderList"
+        @close="showAddFolderDialog = false"
+        :edit-mode="false"
+      />
+    </ODialog>
+  </ODrawer>
+</template>
+
+<script lang="ts">
+import { defineComponent, ref, computed, watch } from "vue";
+import { useStore } from "vuex";
+import dashboardsService from "@/services/dashboards";
+import AddFolder from "@/components/dashboards/AddFolder.vue";
+import OButton from "@/lib/core/Button/OButton.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+import ODialog from "@/lib/overlay/Dialog/ODialog.vue";
+import ODrawer from "@/lib/overlay/Drawer/ODrawer.vue";
+import OSearchInput from "@/lib/forms/SearchInput/OSearchInput.vue";
+import OSelect from "@/lib/forms/Select/OSelect.vue";
+import OCheckbox from "@/lib/forms/Checkbox/OCheckbox.vue";
+import OSpinner from "@/lib/feedback/Spinner/OSpinner.vue";
+import { toast } from "@/lib/feedback/Toast/useToast";
+
+interface GitHubDashboard {
+  name: string;
+  displayName: string;
+  description?: string;
+  folderPath: string;
+  jsonFiles: string[];
+}
+
+export default defineComponent({
+  name: "AddDashboardFromGitHub",
+  components: { AddFolder, OButton, ODialog, ODrawer, OSearchInput, OSelect, OCheckbox, OSpinner,
+    OIcon,
+},
+  props: {
+    modelValue: {
+      type: Boolean,
+      required: true,
+    },
+  },
+  emits: ["update:modelValue", "added"],
+  setup(props, { emit }) {
+    const store = useStore();
+
+    const show = computed({
+      get: () => props.modelValue,
+      set: (val) => emit("update:modelValue", val),
+    });
+
+    const loading = ref(false);
+    const error = ref("");
+    const dashboards = ref<GitHubDashboard[]>([]);
+    const searchQuery = ref("");
+    const selectedDashboards = ref<GitHubDashboard[]>([]);
+    const showFolderSelection = ref(false);
+    const selectedFolderObj = ref<string | null>(null);
+    const folderOptions = ref<{ label: string; value: string }[]>([]);
+    const importing = ref(false);
+    const showAddFolderDialog = ref(false);
+    const addFolderRef = ref<InstanceType<typeof AddFolder> | null>(null);
+    const isAddingFolder = ref(false);
+
+    const handleAddFolder = async () => {
+      if (!addFolderRef.value || isAddingFolder.value) return;
+      isAddingFolder.value = true;
+      try {
+        await addFolderRef.value.submit();
+      } finally {
+        isAddingFolder.value = false;
+      }
+    };
+
+    const filteredDashboards = computed(() => {
+      if (!searchQuery.value) return dashboards.value;
+      const query = searchQuery.value.toLowerCase();
+      return dashboards.value.filter(
+        (d) =>
+          d.displayName.toLowerCase().includes(query) ||
+          d.description?.toLowerCase().includes(query),
+      );
+    });
+
+    const isSelected = (dashboard: GitHubDashboard) => {
+      return selectedDashboards.value.some((d) => d.name === dashboard.name);
+    };
+
+    const toggleDashboard = (dashboard: GitHubDashboard) => {
+      const index = selectedDashboards.value.findIndex(
+        (d) => d.name === dashboard.name,
+      );
+      if (index > -1) {
+        selectedDashboards.value.splice(index, 1);
+      } else {
+        selectedDashboards.value.push(dashboard);
+      }
+    };
+
+    const S3_BASE = "https://openobserve-datasources-bucket.s3.amazonaws.com";
+    const S3_PREFIX = "dashboards/";
+
+    const parseS3Folders = (xmlText: string): string[] => {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, "application/xml");
+      const prefixes = Array.from(doc.querySelectorAll("CommonPrefixes Prefix"));
+      return prefixes.map((el) => {
+        const full = el.textContent || "";
+        return full.replace(S3_PREFIX, "").replace(/\/$/, "");
+      }).filter(Boolean);
+    };
+
+    const parseS3Files = (xmlText: string, folderPath: string): string[] => {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, "application/xml");
+      const keys = Array.from(doc.querySelectorAll("Contents Key"));
+      const prefix = `${S3_PREFIX}${folderPath}/`;
+      return keys
+        .map((el) => (el.textContent || "").replace(prefix, ""))
+        .filter((name) => name.endsWith(".json") && !name.includes("/"));
+    };
+
+    const loadDashboards = async () => {
+      loading.value = true;
+      error.value = "";
+      try {
+        // Check if we have cached data that's still valid
+        const cache = store.state.githubDashboardGallery;
+        const now = Date.now();
+        const cacheAge = cache.lastFetched ? now - cache.lastFetched : Infinity;
+
+        if (cache.dashboards.length > 0 && cacheAge < cache.cacheExpiry) {
+          dashboards.value = cache.dashboards;
+          loading.value = false;
+          return;
+        }
+
+        // Fetch folder list from S3 using List Objects v2 API (requires s3:ListBucket)
+        const response = await fetch(
+          `${S3_BASE}/?list-type=2&prefix=${S3_PREFIX}&delimiter=/`,
+        );
+        if (!response.ok)
+          throw new Error("Failed to fetch dashboards from gallery");
+
+        const xmlText = await response.text();
+        const folderNames = parseS3Folders(xmlText).filter(
+          (name) => !name.startsWith("."),
+        );
+
+        const dashboardList = folderNames
+          .map((name) => ({
+            name,
+            displayName: name.replace(/_/g, " "),
+            folderPath: name,
+            jsonFiles: [],
+          }))
+          .sort((a: any, b: any) => a.displayName.localeCompare(b.displayName));
+
+        store.commit("setGithubDashboardGallery", dashboardList);
+        dashboards.value = dashboardList;
+      } catch (err) {
+        error.value =
+          err instanceof Error
+            ? err.message
+            : "Failed to load dashboard gallery";
+      } finally {
+        loading.value = false;
+      }
+    };
+
+    const loadFolders = async () => {
+      try {
+        const orgId = store.state.selectedOrganization.identifier;
+        const response = await dashboardsService.list_Folders(orgId);
+        let folders: any[] = response.data?.list || [];
+
+        // Ensure default folder is always present and pinned at top (same as getFoldersList in commons.ts)
+        let defaultFolder = folders.find((f: any) => f.folderId === "default");
+        folders = folders.filter((f: any) => f.folderId !== "default");
+
+        if (!defaultFolder) {
+          defaultFolder = {
+            name: "default",
+            folderId: "default",
+            description: "default",
+          };
+        }
+
+        const sorted = [
+          defaultFolder,
+          ...folders.sort((a: any, b: any) => a.name.localeCompare(b.name)),
+        ];
+
+        folderOptions.value = sorted.map((f: any) => ({
+          label: f.name,
+          value: f.folderId,
+        }));
+
+        // Auto-select the default folder; preserve existing selection if still valid
+        if (!selectedFolderObj.value || !folderOptions.value.some((o) => o.value === selectedFolderObj.value)) {
+          selectedFolderObj.value = sorted.find((f: any) => f.folderId === 'default')?.folderId ?? sorted[0]?.folderId ?? null;
+        }
+      } catch (err) {
+        console.error("Error loading folders:", err);
+      }
+    };
+
+    const handleNext = async () => {
+      if (selectedDashboards.value.length === 0) return;
+
+      loading.value = true;
+      try {
+        // Fetch JSON files for selected dashboards if not already loaded
+        for (const dashboard of selectedDashboards.value) {
+          if (dashboard.jsonFiles.length === 0) {
+            try {
+              const folderContents = await fetch(
+                `${S3_BASE}/?list-type=2&prefix=${S3_PREFIX}${dashboard.folderPath}/&delimiter=/`,
+              );
+              if (folderContents.ok) {
+                const xmlText = await folderContents.text();
+                dashboard.jsonFiles = parseS3Files(xmlText, dashboard.folderPath);
+
+                // Update the cache with the fetched JSON files
+                const cache = store.state.githubDashboardGallery;
+                const cachedDashboard = cache.dashboards.find(
+                  (d: any) => d.name === dashboard.name,
+                );
+                if (cachedDashboard) {
+                  cachedDashboard.jsonFiles = dashboard.jsonFiles;
+                  store.commit("setGithubDashboardGallery", cache.dashboards);
+                }
+              }
+            } catch (err) {
+              console.error(
+                `Failed to fetch JSON files for ${dashboard.name}:`,
+                err,
+              );
+            }
+          }
+        }
+
+        await loadFolders();
+        showFolderSelection.value = true;
+      } finally {
+        loading.value = false;
+      }
+    };
+
+    const updateFolderList = async (newFolder: any) => {
+      showAddFolderDialog.value = false;
+      if (newFolder && newFolder.data) {
+        // Refresh folder list
+        await loadFolders();
+        // Auto-select the newly created folder
+        selectedFolderObj.value = newFolder.data.folderId;
+      }
+    };
+
+    const confirmAdd = async () => {
+      if (selectedDashboards.value.length === 0 || !selectedFolderObj.value)
+        return;
+
+      importing.value = true;
+      try {
+        const orgId = store.state.selectedOrganization.identifier;
+        const folderId = selectedFolderObj.value;
+        let successCount = 0;
+        let failCount = 0;
+        const errors: string[] = [];
+
+        // Import each selected dashboard and all its JSON files
+        for (const dashboard of selectedDashboards.value) {
+          for (const jsonFile of dashboard.jsonFiles) {
+            try {
+              // Check cache first
+              const cacheKey = `${dashboard.folderPath}/${jsonFile}`;
+              const jsonCache =
+                store.state.githubDashboardGallery.dashboardJsonCache;
+              let dashboardJson;
+
+              if (jsonCache[cacheKey]) {
+                // Use cached JSON
+                dashboardJson = jsonCache[cacheKey];
+              } else {
+                // Download dashboard JSON from S3
+                const rawUrl = `${S3_BASE}/${S3_PREFIX}${dashboard.folderPath}/${jsonFile}`;
+                const response = await fetch(rawUrl);
+                if (!response.ok) {
+                  throw new Error(
+                    `Failed to fetch ${jsonFile}: ${response.statusText}`,
+                  );
+                }
+                dashboardJson = await response.json();
+
+                // Cache the JSON for future use
+                store.commit("setDashboardJsonCache", {
+                  key: cacheKey,
+                  json: dashboardJson,
+                });
+              }
+
+              const dashboardTitle =
+                dashboardJson.title || jsonFile.replace(".json", "");
+
+              // Check if dashboard already exists in the selected folder
+              const dashboardsResponse = await dashboardsService.list(
+                0,
+                1000,
+                "name",
+                false,
+                "",
+                orgId,
+                folderId,
+                "",
+              );
+
+              const existingDashboard =
+                dashboardsResponse.data?.dashboards?.find(
+                  (d: any) => d.title === dashboardTitle,
+                );
+
+              if (existingDashboard) {
+                // Delete existing dashboard before importing
+                const existingDashboardId =
+                  existingDashboard?.dashboardId ||
+                  existingDashboard?.dashboard_id ||
+                  existingDashboard?.id;
+                if (existingDashboardId) {
+                  await dashboardsService.delete(
+                    orgId,
+                    existingDashboardId,
+                    folderId,
+                  );
+                  await new Promise((resolve) => setTimeout(resolve, 500));
+                }
+              }
+
+              // Import dashboard
+              await dashboardsService.create(orgId, dashboardJson, folderId);
+              successCount++;
+            } catch (err) {
+              failCount++;
+              errors.push(
+                `${jsonFile}: ${err instanceof Error ? err.message : "Unknown error"}`,
+              );
+              console.error(`Failed to import ${jsonFile}:`, err);
+            }
+          }
+        }
+
+        // Show summary notification
+        if (successCount > 0 && failCount === 0) {
+          toast({
+            variant: "success",
+            message: `Successfully imported ${successCount} dashboard(s)!`,
+          });
+        } else if (successCount > 0 && failCount > 0) {
+          toast({
+            variant: "warning",
+            message: `Imported ${successCount} dashboard(s), but ${failCount} failed. Check console for details.`,
+            timeout: 5000,
+          });
+        } else {
+          toast({
+            variant: "error",
+            message: `Failed to import dashboards: ${errors[0] || "Unknown error"}`,
+            timeout: 5000,
+          });
+        }
+
+        show.value = false;
+        showFolderSelection.value = false;
+        emit("added");
+      } catch (err) {
+        toast({
+          variant: "error",
+          message: `Failed to add dashboards: ${err instanceof Error ? err.message : "Unknown error"}`,
+          timeout: 5000,
+        });
+      } finally {
+        importing.value = false;
+      }
+    };
+
+    // Load dashboards when dialog opens
+    watch(show, (newVal) => {
+      if (newVal) {
+        loadDashboards();
+      } else {
+        // Reset state when closing
+        selectedDashboards.value = [];
+        searchQuery.value = "";
+        showFolderSelection.value = false;
+      }
+    });
+
+    return {
+      show,
+      loading,
+      store,
+      error,
+      dashboards,
+      searchQuery,
+      filteredDashboards,
+      selectedDashboards,
+      showFolderSelection,
+      selectedFolderObj,
+      folderOptions,
+      importing,
+      showAddFolderDialog,
+      addFolderRef,
+      isAddingFolder,
+      handleAddFolder,
+      isSelected,
+      toggleDashboard,
+      loadDashboards,
+      handleNext,
+      confirmAdd,
+      updateFolderList,
+    };
+  },
+});
+</script>
+
+<style scoped lang="scss">
+.dashboard-list {
+  max-height: calc(100dvh - 200px);
+  overflow-y: auto;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+
+  .selected-item {
+    background-color: var(--o2-tab-bg) !important;
+  }
+
+  .body--light & {
+    li:hover:not(.selected-item) {
+      background-color: var(--o2-hover-gray);
+    }
+  }
+
+  .body--dark & {
+    li:hover:not(.selected-item) {
+      background-color: var(--o2-hover-gray);
+    }
+  }
+}
+
+.folder-select {
+  :deep(.q-field__control) {
+    min-height: 56px !important;
+  }
+
+  :deep(.q-field__native) {
+    min-height: 20px !important;
+  }
+}
+</style>

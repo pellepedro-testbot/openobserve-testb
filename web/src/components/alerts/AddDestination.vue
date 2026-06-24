@@ -1,0 +1,1456 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <div class="tw:rounded-md tw:p-0 o2-custom-bg"
+    style="
+      height: calc(100vh - 48px);
+      min-height: inherit;
+      display: flex;
+      flex-direction: column;
+    "
+  >
+    <AppPageHeader
+      :back="{
+        label: t('alert_destinations.header'),
+        onClick: () => emit('cancel:hideform'),
+      }"
+      class="card-container tw:px-3 tw:border-b tw:border-border-default"
+      style="flex-shrink: 0"
+    >
+      <template #title>
+        <span data-test="add-destination-title">
+          {{
+            destination
+              ? t("alert_destinations.updateTitle")
+              : t("alert_destinations.addTitle")
+          }}
+        </span>
+      </template>
+    </AppPageHeader>
+    <div
+      class="card-container tw:py-2"
+      style="flex: 1; overflow-y: auto; overflow-x: hidden"
+    >
+      <div>
+        <div class="tw:flex tw:flex-col tw:gap-2 tw:px-3 tw:mt-2 tw:mb-1">
+          <!-- Destination Type Selection for Alerts (only show in create mode, not edit) -->
+          <div v-if="isAlerts && !destination" class="tw:w-full tw:pb-3">
+            <div class="tw:text-sm tw:font-medium tw:mb-2">
+              {{ t("alert_destinations.destination_type") }}
+            </div>
+            <PrebuiltDestinationSelector
+              v-model="formData.destination_type"
+              :search-query="destinationSearchQuery"
+              data-test="prebuilt-destination-selector"
+              @select="selectDestinationType"
+              @update:search-query="destinationSearchQuery = $event"
+            />
+          </div>
+
+          <!-- Destination Type and Name Display for Edit Mode -->
+          <div
+            v-if="isAlerts && destination && formData.destination_type"
+            class="tw:w-full tw:pb-3"
+          >
+            <div class="tw:flex tw:gap-3">
+              <!-- Destination Type (Read-only) -->
+              <div class="tw:w-1/2">
+                <div class="tw:text-sm tw:font-medium tw:mb-1 tw:leading-tight">
+                  {{ t("alert_destinations.destination_type") }}
+                </div>
+                <div
+                  class="tw:flex tw:items-center tw:p-2 el-border el-border-radius"
+                  data-test="destination-type-readonly"
+                >
+                  <OIcon
+                    :name="getDestinationTypeIcon(formData.destination-type)"
+                    size="md"
+                    class="tw:mr-2"
+                  />
+                  <span class="tw:text-sm">{{
+                    getDestinationTypeName(formData.destination_type)
+                  }}</span>
+                  <OBadge
+                    size="sm"
+                    variant="default"
+                    class="tw:ml-2"
+                    >{{ t("alert_destinations.readonly") }}</OBadge
+                  >
+                </div>
+              </div>
+              <!-- Destination Name (Read-only) -->
+              <div class="tw:w-1/2">
+                <OInput
+                  data-test="add-destination-name-input"
+                  v-model="formData.name"
+                  :label="t('alerts.name') + ' *'"
+                  readonly
+                  disabled
+                  tabindex="0"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Prebuilt Destination Form (for alerts only) -->
+          <!-- Show for: create mode with destination_type selected OR edit mode for prebuilt destinations -->
+          <div
+            v-if="
+              isAlerts &&
+              (isPrebuiltDestination ||
+                (isUpdatingDestination &&
+                  formData.destination_type !== 'custom'))
+            "
+            class="tw:w-full"
+          >
+            <!-- Name Field for Create Mode -->
+            <div v-if="!destination" class="tw:w-1/2 tw:pb-3">
+              <OInput
+                data-test="add-destination-name-input"
+                v-model="formData.name"
+                :label="t('alerts.name') + ' *'"
+                tabindex="0"
+                :error="!!nameError"
+                :error-message="nameError"
+                @update:model-value="nameError = ''"
+              />
+            </div>
+
+            <PrebuiltDestinationForm
+              v-if="
+                formData.destination_type &&
+                formData.destination_type !== 'custom'
+              "
+              ref="prebuiltFormRef"
+              :key="`${formData.destination_type}-${isUpdatingDestination}`"
+              v-model="prebuiltCredentials"
+              :destination-type="formData.destination_type"
+              :hide-actions="true"
+              data-test="prebuilt-form"
+            />
+            <div v-else-if="isUpdatingDestination" class="tw:p-3 tw:text-center">
+              <OSpinner size="md" data-test="add-destination-loading-indicator" />
+              <div class="tw:mt-2 tw:text-gray-400">Loading destination data...</div>
+            </div>
+
+            <!-- Template selector for prebuilt destinations -->
+            <div
+              v-if="
+                formData.destination_type &&
+                formData.destination_type !== 'custom'
+              "
+              class="tw:w-1/2 tw:py-1"
+            >
+              <OSelect
+                data-test="add-destination-prebuilt-template-select"
+                v-model="formData.template"
+                :label="t('alert_destinations.template')"
+                :options="prebuiltTemplateOptions"
+                labelKey="label"
+                valueKey="value"
+                tabindex="0"
+              />
+              <div class="tw:text-xs tw:text-gray-400 tw:mt-1">
+                {{ t('alert_destinations.templateHelp', {
+                  type: getDestinationTypeName(formData.destination_type),
+                  name: defaultPrebuiltTemplateName,
+                }) }}
+              </div>
+            </div>
+
+            <!-- Additional Settings for Prebuilt Destinations -->
+            <div class="tw:w-full tw:mt-3">
+              <div class="tw:font-bold tw:py-1">
+                {{ t("alert_destinations.additional_settings") }}
+              </div>
+
+              <!-- Custom Headers (hidden for email destinations) -->
+              <div v-if="formData.destination_type !== 'email'" class="tw:py-2">
+                <div class="tw:text-sm tw:font-medium tw:pb-1">
+                  {{ t("alert_destinations.custom_headers") }}
+                </div>
+                <div
+                  v-for="(header, index) in apiHeaders"
+                  :key="header.uuid"
+                  class="tw:flex tw:gap-2 tw:pb-2"
+                >
+                  <div class="tw:w-5/12 tw:ml-0">
+                    <OInput
+                      :data-test="`add-destination-header-${header['key']}-key-input`"
+                      v-model="header.key"
+                      :placeholder="t('alert_destinations.api_header')"
+                      tabindex="0"
+                    />
+                  </div>
+                  <div class="tw:w-5/12 tw:ml-0">
+                    <OInput
+                      :data-test="`add-destination-header-${header['key']}-value-input`"
+                      v-model="header.value"
+                      :placeholder="t('alert_destinations.api_header_value')"
+                      tabindex="0"
+                    />
+                  </div>
+                  <div class="tw:w-1/6 tw:ml-0">
+                    <OButton
+                      :data-test="`add-destination-header-${header['key']}-delete-btn`"
+                      class="tw:ml-1"
+                      variant="ghost"
+                      size="icon-circle-sm"
+                      :title="t('alert_templates.edit')"
+                      @click="deleteApiHeader(header)"
+                    >
+                      <OIcon name="delete" size="sm" />
+                    </OButton>
+                    <OButton
+                      data-test="add-destination-add-header-btn"
+                      v-if="index === apiHeaders.length - 1"
+                      class="tw:ml-1"
+                      variant="ghost"
+                      size="icon-circle-sm"
+                      :title="t('alert_templates.edit')"
+                      @click="addApiHeader()"
+                    >
+                      <OIcon name="add" size="sm" />
+                    </OButton>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Skip TLS Verify Toggle -->
+              <div class="tw:py-2">
+                <OSwitch
+                  data-test="add-destination-skip-tls-verify-toggle"
+                  v-model="formData.skip_tls_verify"
+                  :label="t('alert_destinations.skip_tls_verify')"
+                />
+              </div>
+            </div>
+
+            <!-- Test Result Display -->
+            <DestinationTestResult
+              v-if="lastTestResult"
+              :result="lastTestResult"
+              :is-loading="isTestInProgress"
+              data-test="prebuilt-test-result"
+              @retry="handleTestDestination"
+            />
+          </div>
+
+          <!-- Tabs for non-alert destinations OR custom alert destinations -->
+          <div
+            v-if="
+              !isAlerts || (isAlerts && formData.destination_type === 'custom')
+            "
+            class="tw:w-full tw:pb-3"
+          >
+            <div class="app-tabs-container tw:h-[36px] tw:mr-2 tw:w-fit">
+              <app-tabs
+                data-test="add-destination-tabs"
+                :tabs="tabs"
+                class="tabs-selection-container"
+                v-model:active-tab="formData.type"
+              />
+            </div>
+          </div>
+          <div
+            v-if="formData.type === 'email' && !getFormattedTemplates.length"
+            class="tw:flex tw:items-center tw:w-full tw:mb-3"
+          >
+            <div class="tw:text-sm tw:font-medium tw:mr-2">
+              It looks like you haven't created any Email Templates yet.
+            </div>
+            <OButton variant="outline" size="sm" @click="createEmailTemplate"
+              >Create Email Template</OButton
+            >
+          </div>
+          <!-- Name + Template row for custom alert destinations -->
+          <div
+            v-if="isAlerts && formData.destination_type === 'custom'"
+            class="tw:flex tw:gap-3 tw:w-full"
+          >
+            <div class="tw:w-1/2 tw:py-1">
+              <OInput
+                data-test="add-destination-name-input"
+                v-model="formData.name"
+                :label="t('alerts.name') + ' *'"
+                tabindex="0"
+                :error="!!nameError"
+                :error-message="nameError"
+                @update:model-value="nameError = ''"
+              />
+            </div>
+            <div class="tw:w-1/2 tw:py-1">
+              <OSelect
+                data-test="add-destination-template-select"
+                v-model="formData.template"
+                :label="t('alert_destinations.template') + ' *'"
+                :options="getFormattedTemplates"
+                tabindex="0"
+                :error="!!templateError"
+                :error-message="templateError"
+                @update:model-value="templateError = ''"
+              />
+            </div>
+          </div>
+          <!-- Name field for non-alert destinations (pipelines) -->
+          <div
+            v-if="!isAlerts"
+            class="tw:py-1 tw:w-full"
+          >
+            <OInput
+              data-test="add-destination-name-input"
+              v-model="formData.name"
+              :label="t('alerts.name') + ' *'"
+              tabindex="0"
+              :error="!!nameError"
+              :error-message="nameError"
+              @update:model-value="nameError = ''"
+            />
+          </div>
+
+          <template
+            v-if="
+              (isAlerts &&
+                formData.destination_type === 'custom' &&
+                formData.type === 'http') ||
+              (!isAlerts && formData.type === 'http')
+            "
+          >
+            <div class="tw:flex tw:gap-3 tw:w-full">
+              <div class="tw:w-1/2 tw:py-1">
+                <OInput
+                  data-test="add-destination-url-input"
+                  v-model="formData.url"
+                  :label="t('alert_destinations.url') + ' *'"
+                  tabindex="0"
+                  :error="!!urlError"
+                  :error-message="urlError"
+                  @update:model-value="urlError = ''"
+                />
+              </div>
+              <div
+                class="tw:py-1 destination-method-select"
+                :class="{ 'tw:w-1/4': !isAlerts, 'tw:w-1/2': isAlerts }"
+              >
+                <OSelect
+                  data-test="add-destination-method-select"
+                  v-model="formData.method"
+                  :label="t('alert_destinations.method') + ' *'"
+                  :options="apiMethods"
+                  tabindex="0"
+                  :error="!!methodError"
+                  :error-message="methodError"
+                  @update:model-value="methodError = ''"
+                />
+              </div>
+              <div
+                v-if="!isAlerts"
+                class="tw:w-1/4 tw:py-1 destination-method-select"
+              >
+                <OSelect
+                  data-test="add-destination-output-format-select"
+                  v-model="formData.output_format"
+                  :label="t('alert_destinations.output_format') + ' *'"
+                  :options="outputFormats"
+                  tabindex="0"
+                  :error="!!outputFormatError"
+                  :error-message="outputFormatError"
+                  @update:model-value="outputFormatError = ''"
+                />
+              </div>
+            </div>
+            <div class="tw:w-full tw:py-2">
+              <div class="tw:font-bold tw:py-1">Headers</div>
+              <div
+                v-for="(header, index) in apiHeaders"
+                :key="header.uuid"
+                class="tw:flex tw:gap-2 tw:pb-2"
+              >
+                <div class="tw:w-5/12 tw:ml-0">
+                  <OInput
+                    :data-test="`add-destination-header-${header['key']}-key-input`"
+                    v-model="header.key"
+                    :placeholder="t('alert_destinations.api_header')"
+                    tabindex="0"
+                  />
+                </div>
+                <div class="tw:w-5/12 tw:ml-0">
+                  <OInput
+                    :data-test="`add-destination-header-${header['key']}-value-input`"
+                    v-model="header.value"
+                    :placeholder="t('alert_destinations.api_header_value')"
+                    tabindex="0"
+                  />
+                </div>
+                <div class="tw:w-1/6 tw:ml-0">
+                  <OButton
+                    :data-test="`add-destination-header-${header['key']}-delete-btn`"
+                    class="tw:ml-1"
+                    variant="ghost"
+                    size="icon-circle-sm"
+                    :title="t('alert_templates.edit')"
+                    @click="deleteApiHeader(header)"
+                  >
+                    <OIcon name="delete" size="sm" />
+                  </OButton>
+                  <OButton
+                    data-test="add-destination-add-header-btn"
+                    v-if="index === apiHeaders.length - 1"
+                    class="tw:ml-1"
+                    variant="ghost"
+                    size="icon-circle-sm"
+                    :title="t('alert_templates.edit')"
+                    @click="addApiHeader()"
+                  >
+                    <OIcon name="add" size="sm" />
+                  </OButton>
+                </div>
+              </div>
+            </div>
+            <div class="tw:w-full tw:py-2">
+              <OSwitch
+                data-test="add-destination-skip-tls-verify-toggle"
+                v-model="formData.skip_tls_verify"
+                :label="t('alert_destinations.skip_tls_verify')"
+              />
+            </div>
+          </template>
+          <template
+            v-if="
+              formData.type === 'email' &&
+              (!isAlerts || formData.destination_type === 'custom')
+            "
+          >
+            <OInput
+              v-model="formData.emails"
+              :label="t('reports.recipients') + ' *'"
+              tabindex="0"
+              style="width: 100%"
+              :placeholder="t('user.inviteByEmail')"
+              :error="!!emailsError"
+              :error-message="emailsError"
+              @update:model-value="emailsError = ''"
+            />
+          </template>
+
+          <template
+            v-if="
+              formData.type === 'action' &&
+              (!isAlerts || formData.destination_type === 'custom')
+            "
+          >
+            <div class="tw:w-1/2 tw:py-1 action-select">
+              <OSelect
+                data-test="add-destination-action-select"
+                v-model="formData.action_id"
+                :label="t('alert_destinations.action') + ' *'"
+                :options="actionOptions"
+                searchable
+                labelKey="label"
+                valueKey="value"
+                :loading="isLoadingActions"
+                tabindex="0"
+                :error="!!actionError"
+                :error-message="actionError"
+                @update:model-value="actionError = ''"
+              />
+            </div>
+          </template>
+        </div>
+      </div>
+      <div class="tw:flex tw:justify-between tw:px-4 tw:py-4 tw:w-full tw:border-t tw:border-border-default">
+        <!-- Left side: Test and Preview buttons (only for prebuilt destinations) -->
+        <div
+          v-if="
+            isAlerts &&
+            (isPrebuiltDestination ||
+              (isUpdatingDestination && formData.destination_type !== 'custom'))
+          "
+          class="tw:flex tw:items-center tw:gap-2"
+        >
+          <OButton
+            data-test="destination-preview-button"
+            variant="outline"
+            size="sm"
+            @click="showPreview"
+            icon-left="preview"
+          >
+            {{ t("alert_destinations.preview") }}
+          </OButton>
+          <OButton
+            data-test="destination-test-button"
+            :loading="isTestInProgress"
+            variant="outline"
+            size="sm"
+            @click="handleTestDestination"
+            icon-left="send"
+          >
+            {{ t("alert_destinations.test") }}
+          </OButton>
+        </div>
+        <div v-else></div>
+
+        <!-- Right side: Cancel and Save buttons -->
+        <div class="tw:flex tw:items-center tw:gap-2">
+          <OButton
+            data-test="add-destination-cancel-btn"
+            v-close-popup="true"
+            variant="outline"
+            size="sm-action"
+            @click="$emit('cancel:hideform')"
+            >{{ t("alerts.cancel") }}</OButton
+          >
+          <OButton
+            data-test="add-destination-submit-btn"
+            variant="primary"
+            size="sm-action"
+            type="submit"
+            @click="saveDestination"
+            >{{ t("alerts.save") }}</OButton
+          >
+        </div>
+      </div>
+    </div>
+
+    <!-- Destination Preview Modal -->
+    <DestinationPreview
+      v-model="showPreviewModal"
+      :type="formData.destination_type"
+      :template-content="previewContent"
+      data-test="destination-preview-modal"
+    />
+  </div>
+</template>
+<script lang="ts" setup>
+import {
+  ref,
+  computed,
+  onBeforeMount,
+  onActivated,
+  watch,
+  nextTick,
+} from "vue";
+import type { Ref, PropType } from "vue";
+import { useI18n } from "vue-i18n";
+import destinationService from "@/services/alert_destination";
+import { useStore } from "vuex";
+import OButton from "@/lib/core/Button/OButton.vue";
+import OInput from "@/lib/forms/Input/OInput.vue";
+import OSelect from "@/lib/forms/Select/OSelect.vue";
+import OSwitch from "@/lib/forms/Switch/OSwitch.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+import OBadge from "@/lib/core/Badge/OBadge.vue";
+import AppPageHeader from "@/components/common/AppPageHeader.vue";
+import type {
+  Template,
+  DestinationData,
+  Headers,
+  DestinationPayload,
+} from "@/ts/interfaces";
+import { useRouter } from "vue-router";
+import { isValidResourceName } from "@/utils/zincutils";
+import AppTabs from "@/components/common/AppTabs.vue";
+import config from "@/aws-exports";
+import useActions from "@/composables/useActions";
+import { useReo } from "@/services/reodotdev_analytics";
+import { usePrebuiltDestinations } from "@/composables/usePrebuiltDestinations";
+import { isPrebuiltType, detectPrebuiltTypeFromUrl } from "@/utils/prebuilt-templates";
+import PrebuiltDestinationForm from "./PrebuiltDestinationForm.vue";
+import PrebuiltDestinationSelector from "./PrebuiltDestinationSelector.vue";
+import DestinationTestResult from "./DestinationTestResult.vue";
+import DestinationPreview from "./DestinationPreview.vue";
+import OSpinner from "@/lib/feedback/Spinner/OSpinner.vue";
+import { toast } from "@/lib/feedback/Toast/useToast";
+
+const props = defineProps({
+  templates: {
+    type: Array as PropType<Template[]>,
+    default: [],
+  },
+  destination: {
+    type: Object as PropType<DestinationPayload | null>,
+    default: null,
+  },
+  isAlerts: {
+    type: Boolean,
+    default: true,
+  },
+});
+const emit = defineEmits(["get:destinations", "cancel:hideform"]);
+const apiMethods = ["get", "post", "put"];
+const outputFormats = ["json", "ndjson"];
+const store = useStore();
+const { t } = useI18n();
+const { track } = useReo();
+const formData: Ref<DestinationData> = ref({
+  name: "",
+  url: "",
+  method: "post",
+  skip_tls_verify: false,
+  template: "",
+  headers: {},
+  emails: "",
+  type: "http",
+  action_id: "",
+  output_format: "json",
+  destination_type: "", // For prebuilt destinations
+});
+const isUpdatingDestination = ref(false);
+
+const isLoadingActions = ref(false);
+
+const router = useRouter();
+
+const actionOptions = ref<{ value: string; label: string; type: string }[]>([]);
+
+// Field-level error refs
+const nameError = ref('');
+const templateError = ref('');
+const urlError = ref('');
+const methodError = ref('');
+const outputFormatError = ref('');
+const emailsError = ref('');
+const actionError = ref('');
+
+const { getAllActions } = useActions();
+
+// Prebuilt destinations composable
+const {
+  availableTypes,
+  popularTypes,
+  validateCredentials,
+  testDestination,
+  createDestination,
+  updateDestination,
+  generatePreview,
+  isTestInProgress,
+  lastTestResult,
+  detectPrebuiltType,
+} = usePrebuiltDestinations();
+
+// Prebuilt destinations state
+const prebuiltCredentials = ref<Record<string, any>>({});
+const prebuiltFormRef = ref<{ validate: () => boolean } | null>(null);
+const destinationSearchQuery = ref("");
+const showPreviewModal = ref(false);
+const previewContent = ref("");
+
+// TODO OK: Use UUID package instead of this and move this method in utils
+const getUUID = () => {
+  return (Math.floor(Math.random() * (9999999999 - 100 + 1)) + 100).toString();
+};
+
+const apiHeaders: Ref<
+  {
+    key: string;
+    value: string;
+    uuid: string;
+  }[]
+> = ref([{ key: "", value: "", uuid: getUUID() }]);
+
+const tabs = computed(() => {
+  // In edit mode for custom destinations, only show the tab for the current type
+  if (
+    isUpdatingDestination.value &&
+    formData.value.destination_type === "custom"
+  ) {
+    const currentType = formData.value.type;
+
+    // Only return the tab matching the current destination type
+    if (currentType === "http") {
+      return [{ label: t("alerts.webhook"), value: "http", icon: "webhook" }];
+    } else if (currentType === "email") {
+      return [{ label: t("alerts.email"), value: "email", icon: "mail" }];
+    } else if (currentType === "action") {
+      return [{ label: t("alerts.action"), value: "action", icon: "bolt" }];
+    }
+  }
+
+  // In create mode, show all tabs
+  const tabs = [
+    { label: t("alerts.webhook"), value: "http", icon: "webhook" },
+    { label: t("alerts.email"), value: "email", icon: "mail" },
+  ];
+
+  if (
+    (config.isEnterprise == "true" || config.isCloud == "true") &&
+    store.state.zoConfig.actions_enabled
+  ) {
+    tabs.push({ label: t("alerts.action"), value: "action", icon: "bolt" });
+  }
+
+  return tabs;
+});
+
+// Destination types for alerts (prebuilt + custom)
+const destinationTypes = computed(() => {
+  if (!props.isAlerts) return [];
+
+  const prebuiltTypes = availableTypes.value.map((type) => ({
+    value: type.id,
+    label: type.name,
+    image: `/src/assets/images/destinations/${type.icon}.png`,
+    icon: type.icon,
+    description: type.description,
+  }));
+
+  // Add custom option
+  prebuiltTypes.push({
+    value: "custom",
+    label: "Custom",
+    image: null,
+    icon: "webhook",
+    description: "Create custom webhook destination",
+  });
+
+  return prebuiltTypes;
+});
+
+// Check if current destination type is prebuilt
+const isPrebuiltDestination = computed(() => {
+  return (
+    formData.value.destination_type &&
+    formData.value.destination_type !== "custom"
+  );
+});
+
+// Helper methods for displaying destination type in edit mode
+const getDestinationTypeName = (typeId: string) => {
+  const type = availableTypes.value.find((t) => t.id === typeId);
+  return type ? type.name : typeId;
+};
+
+const getDestinationTypeIcon = (typeId: string) => {
+  const iconMap: Record<string, string> = {
+    slack: "chat",
+    discord: "forum",
+    msteams: "groups",
+    email: "email",
+    pagerduty: "warning",
+    opsgenie: "notifications_active",
+    servicenow: "support_agent",
+    custom: "settings",
+  };
+  return iconMap[typeId] || "webhook";
+};
+
+onActivated(() => setupDestinationData());
+onBeforeMount(async () => {
+  setupDestinationData();
+  await getActionOptions();
+});
+
+// Watch for destination prop changes (important for edit mode dialog)
+watch(
+  () => props.destination,
+  (newDest) => {
+    if (newDest && newDest.name) {
+      // Only run setup when destination has actual data (name is a good indicator)
+      setupDestinationData();
+    }
+  },
+  { deep: true },
+);
+
+const setupDestinationData = () => {
+  if (props.destination) {
+    isUpdatingDestination.value = true;
+    formData.value.name = props.destination.name;
+    formData.value.url = props.destination.url;
+    formData.value.method = props.destination.method;
+    formData.value.skip_tls_verify = props.destination.skip_tls_verify;
+    formData.value.template = props.destination.template;
+    if (!props.destination.headers) formData.value.headers = {};
+    formData.value.headers = props.destination.headers;
+    formData.value.emails = (props.destination?.emails || []).join(", ");
+    formData.value.type = props.destination.type || "http";
+    formData.value.action_id = props.destination.action_id || "";
+
+    // Set destination_type for prebuilt destinations in edit mode
+    // Parse metadata if it's a string
+    let parsedMetadata: any = null;
+    if (props.destination.metadata) {
+      try {
+        parsedMetadata =
+          typeof props.destination.metadata === "string"
+            ? JSON.parse(props.destination.metadata)
+            : props.destination.metadata;
+      } catch (e) {
+        console.error("Failed to parse destination metadata:", e);
+      }
+    }
+
+    // Priority 1: Check metadata.prebuilt_type (most reliable for prebuilt destinations)
+    if (
+      parsedMetadata?.prebuilt_type &&
+      isPrebuiltType(parsedMetadata.prebuilt_type)
+    ) {
+      formData.value.destination_type = parsedMetadata.prebuilt_type;
+    }
+    // Priority 2: Check if template starts with 'system-prebuilt-' AND destination structure matches
+    // (Must have emails array for email, or specific prebuilt URL patterns for HTTP)
+    else if (props.destination.template?.startsWith("system-prebuilt-")) {
+      const templateType = props.destination.template.replace(
+        "system-prebuilt-",
+        "",
+      );
+      // Only treat as prebuilt if structure matches the type
+      if (
+        templateType === "email" &&
+        props.destination.type === "email" &&
+        props.destination.emails
+      ) {
+        formData.value.destination_type = "email";
+      } else if (props.destination.type === "http" && props.destination.url) {
+        // Use URL-only detection here — detectPrebuiltType also checks the template
+        // name, which would always match since we're already inside the
+        // system-prebuilt-* branch. A custom destination can have any template,
+        // so the URL is the only reliable signal at this point.
+        const urlType = detectPrebuiltTypeFromUrl(props.destination.url);
+        if (urlType && isPrebuiltType(urlType)) {
+          formData.value.destination_type = urlType;
+        } else {
+          // Has system template but URL doesn't match prebuilt patterns - it's custom
+          formData.value.destination_type = "custom";
+        }
+      } else {
+        formData.value.destination_type = "custom";
+      }
+    }
+    // Priority 3: Check if template starts with 'prebuilt_' (user templates)
+    // Also verify the URL matches the prebuilt type to avoid misclassifying custom
+    // destinations that happen to use a template with a prebuilt_ prefix.
+    else if (props.destination.template?.startsWith("prebuilt_")) {
+      const extractedType = props.destination.template.replace("prebuilt_", "");
+      if (isPrebuiltType(extractedType) && props.destination.url) {
+        const urlType = detectPrebuiltTypeFromUrl(props.destination.url);
+        formData.value.destination_type = urlType === extractedType ? extractedType : "custom";
+      } else {
+        formData.value.destination_type = isPrebuiltType(extractedType) ? extractedType : "custom";
+      }
+    }
+    // Priority 4: Check if template includes 'prebuilt' (legacy format)
+    // Also verify the URL matches the prebuilt type (same guard as Priority 3).
+    else if (props.destination.template?.includes("prebuilt")) {
+      const parts = props.destination.template.split("-");
+      const extractedType = parts[parts.length - 1];
+      if (isPrebuiltType(extractedType) && props.destination.url) {
+        const urlType = detectPrebuiltTypeFromUrl(props.destination.url);
+        formData.value.destination_type = urlType === extractedType ? extractedType : "custom";
+      } else {
+        formData.value.destination_type = isPrebuiltType(extractedType) ? extractedType : "custom";
+      }
+    }
+    // Priority 5: Fallback to URL-based detection (for destinations created before metadata was added)
+    else if (props.destination.url) {
+      const detectedType = detectPrebuiltType(props.destination);
+      if (detectedType) {
+        formData.value.destination_type = detectedType;
+      } else {
+        formData.value.destination_type = "custom";
+      }
+    }
+    // Priority 6: No indicators - this is a custom destination
+    else {
+      formData.value.destination_type = "custom";
+    }
+
+    // Continue with credential restoration if we have a destination_type
+    if (
+      formData.value.destination_type &&
+      formData.value.destination_type !== "custom"
+    ) {
+      const typeId = formData.value.destination_type;
+
+      // Restore prebuilt credentials from metadata and destination fields
+      const credentials: Record<string, any> = {};
+
+      // Step 1: Parse metadata and remove credential_ prefix
+      if (props.destination.metadata) {
+        try {
+          const metadata =
+            typeof props.destination.metadata === "string"
+              ? JSON.parse(props.destination.metadata)
+              : props.destination.metadata;
+
+          // Extract credential fields (remove credential_ prefix)
+          Object.entries(metadata).forEach(([key, value]) => {
+            if (key.startsWith("credential_")) {
+              const credentialKey = key.replace("credential_", "");
+              credentials[credentialKey] = value;
+            }
+          });
+        } catch (e) {
+          console.error("Failed to parse destination metadata:", e);
+        }
+      }
+
+      // Step 2: Restore sensitive fields from destination properties
+      // webhookUrl is stored in the url field for webhook-based destinations
+      if (props.destination.url) {
+        credentials.webhookUrl = props.destination.url;
+      }
+
+      // For ServiceNow, instanceUrl is the base URL
+      if (typeId === "servicenow" && props.destination.url) {
+        credentials.instanceUrl = props.destination.url;
+      }
+
+      // For email destinations, recipients are in emails field
+      if (typeId === "email" && props.destination.emails) {
+        credentials.recipients = Array.isArray(props.destination.emails)
+          ? props.destination.emails.join(", ")
+          : props.destination.emails;
+      }
+
+      // For PagerDuty, integrationKey is in headers (if present)
+      if (
+        typeId === "pagerduty" &&
+        props.destination.headers?.["X-Routing-Key"]
+      ) {
+        credentials.integrationKey = props.destination.headers["X-Routing-Key"];
+      }
+
+      // For Opsgenie, apiKey is in Authorization header
+      if (
+        typeId === "opsgenie" &&
+        props.destination.headers?.["Authorization"]
+      ) {
+        const authHeader = props.destination.headers["Authorization"];
+        if (authHeader.startsWith("GenieKey ")) {
+          credentials.apiKey = authHeader.replace("GenieKey ", "");
+        }
+      }
+
+      // For ServiceNow, username:password are in Basic auth Authorization header
+      if (
+        typeId === "servicenow" &&
+        props.destination.headers?.["Authorization"]
+      ) {
+        const authHeader = props.destination.headers["Authorization"];
+        if (authHeader.startsWith("Basic ")) {
+          try {
+            const decoded = atob(authHeader.replace("Basic ", ""));
+            const colonIndex = decoded.indexOf(":");
+            if (colonIndex > 0) {
+              credentials.username = decoded.substring(0, colonIndex);
+              credentials.password = decoded.substring(colonIndex + 1);
+            }
+          } catch {
+            // Can't decode — leave credential fields blank
+          }
+        }
+      }
+
+      // Note: Non-sensitive fields (severity, priority, assignmentGroup, ccRecipients, subject, username, etc.)
+      // are automatically restored from metadata via Step 1 (credential_ prefix removal)
+      // Sensitive fields containing "password", "key", or "token" are NOT saved to metadata for security
+
+      prebuiltCredentials.value = credentials;
+
+      // Template name is stored and displayed as-is (e.g. "prebuilt_slack").
+      // The dropdown's first option has that value, so edit mode matches automatically.
+    }
+
+    if (Object.keys(formData.value?.headers || {}).length) {
+      // Filter out system/prebuilt headers - only load custom headers into the UI
+      const systemHeaders = ["Content-Type", "Authorization", "X-Routing-Key"];
+      const customHeadersOnly = Object.entries(
+        formData.value?.headers || {},
+      ).filter(([key]) => !systemHeaders.includes(key));
+
+      if (customHeadersOnly.length > 0) {
+        apiHeaders.value = [];
+        customHeadersOnly.forEach(([key, value]) => {
+          addApiHeader(key, value);
+        });
+      }
+    }
+    if (props.destination.output_format) {
+      formData.value.output_format = props.destination.output_format;
+    }
+  }
+};
+
+const getFormattedTemplates = computed(() =>
+  props.templates
+    .filter((template: any) => {
+      if (formData.value.type === "email" && template.type === "email")
+        return true;
+      else if (formData.value.type !== "email") return true;
+    })
+    .map((template: any) => template.name),
+);
+
+// The prebuilt template for this destination type, sourced from the API
+// (isPrebuilt: true). Falls back to the constructed name if the API hasn't
+// returned it yet (e.g. templates list still loading).
+const defaultPrebuiltTemplateName = computed(() => {
+  if (
+    !formData.value.destination_type ||
+    formData.value.destination_type === "custom"
+  ) {
+    return "";
+  }
+  const expectedName = `prebuilt_${formData.value.destination_type}`;
+  const fromApi = props.templates.find(
+    (t: any) => t.isPrebuilt && t.name === expectedName
+  );
+  return fromApi?.name ?? expectedName;
+});
+
+// Template choices for a prebuilt destination: the API-sourced prebuilt
+// template for this type as the first (default) option, followed by any
+// user-created custom templates of the matching kind (email vs http).
+// Other prebuilt types are excluded to prevent cross-type mismatches.
+const prebuiltTemplateOptions = computed(() => {
+  const isEmailType = formData.value.destination_type === "email";
+  const matching = props.templates.filter((template: any) => {
+    if (template.isPrebuilt) return false;
+    if (isEmailType) return template.type === "email";
+    return template.type !== "email";
+  });
+
+  const options: { label: string; value: string }[] = [];
+
+  if (defaultPrebuiltTemplateName.value) {
+    const defaultLabel = t('alert_destinations.templateDefaultOption', {
+      name: defaultPrebuiltTemplateName.value,
+    });
+    options.push({ label: defaultLabel, value: defaultPrebuiltTemplateName.value });
+  }
+
+  matching.forEach((template: any) => {
+    options.push({ label: template.name, value: template.name });
+  });
+
+  return options;
+});
+
+const isValidDestination = computed(
+  () =>
+    formData.value.name &&
+    ((formData.value.url &&
+      formData.value.method &&
+      formData.value.type === "http") ||
+      (formData.value.type === "email" && formData.value?.emails?.length) ||
+      (formData.value.type === "action" && formData.value?.action_id?.length) ||
+      (!props.isAlerts && formData.value.url && formData?.value?.method)) &&
+    (props.isAlerts ? formData.value.template : true),
+);
+
+const updateActionOptions = () => {
+  actionOptions.value = [];
+  store.state.organizationData.actions.forEach((action: any) => {
+    if (action.execution_details_type === "service")
+      actionOptions.value.push({
+        value: action.id,
+        label: action.name,
+        type: action.execution_details_type,
+      });
+  });
+};
+
+const getActionOptions = async () => {
+  try {
+    isLoadingActions.value = true;
+    // Update action options with existing actions
+    updateActionOptions();
+
+    // Get all actions from the server and update the action options
+    await getAllActions();
+    isLoadingActions.value = false;
+    updateActionOptions();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    isLoadingActions.value = false;
+  }
+};
+
+// Select destination type (prebuilt or custom)
+const selectDestinationType = (type: string) => {
+  formData.value.destination_type = type;
+
+  // Reset form data when switching types
+  prebuiltCredentials.value = {};
+
+  if (type === "custom") {
+    // Switch to custom mode
+    formData.value.type = "http";
+    formData.value.url = "";
+    formData.value.template = "";
+  } else {
+    formData.value.type = type === "email" ? "email" : "http";
+    formData.value.template = defaultPrebuiltTemplateName.value;
+  }
+};
+
+// Handle prebuilt destination test
+const handleTestDestination = async () => {
+  if (!isPrebuiltDestination.value) return;
+
+  try {
+    await testDestination(
+      formData.value.destination_type,
+      prebuiltCredentials.value,
+    );
+  } catch (error) {
+    console.error("Test failed:", error);
+  }
+};
+
+// Show template preview
+const showPreview = async () => {
+  if (!isPrebuiltDestination.value) return;
+
+  try {
+    // Clear previous content
+    previewContent.value = "";
+
+    // Fetch and generate preview
+    const preview = await generatePreview(
+      formData.value.destination_type,
+      prebuiltCredentials.value,
+    );
+    previewContent.value = preview;
+
+    // Only show modal after content is ready
+    showPreviewModal.value = true;
+  } catch (error) {
+    console.error("Failed to generate preview:", error);
+    toast({
+      variant: "error",
+      message: "Failed to generate preview",
+    });
+  }
+};
+
+// Save prebuilt or custom destination
+const saveDestination = async () => {
+  // Handle prebuilt destinations (both create and update)
+  if (isPrebuiltDestination.value) {
+    if (prebuiltFormRef.value && !prebuiltFormRef.value.validate()) return;
+    try {
+      // Build custom headers object from apiHeaders array
+      const customHeaders: Headers = {};
+      apiHeaders.value.forEach((header) => {
+        if (header["key"] && header["value"]) {
+          customHeaders[header.key] = header.value;
+        }
+      });
+
+      const templateOverride = formData.value.template?.trim() || undefined;
+
+      if (isUpdatingDestination.value) {
+        // Update existing prebuilt destination
+        await updateDestination(
+          formData.value.destination_type,
+          props.destination.name, // original name
+          formData.value.name, // potentially new name
+          prebuiltCredentials.value,
+          customHeaders, // custom headers
+          formData.value.skip_tls_verify || false, // skipTlsVerify
+          templateOverride,
+        );
+      } else {
+        // Create new prebuilt destination
+        await createDestination(
+          formData.value.destination_type,
+          formData.value.name,
+          prebuiltCredentials.value,
+          customHeaders, // custom headers
+          formData.value.skip_tls_verify || false, // skipTlsVerify
+          templateOverride,
+        );
+      }
+
+      emit("get:destinations");
+      emit("cancel:hideform");
+      return;
+    } catch (error) {
+      console.error("Failed to save prebuilt destination:", error);
+      return;
+    }
+  }
+
+  // Handle custom destinations (existing logic)
+  if (!isValidDestination.value) {
+    // Set tw:inline error states for each required field
+    const name = formData.value.name;
+    nameError.value = !name ? t('common.nameRequired')
+      : (!isValidResourceName(name) ? 'Characters like :, ?, /, #, and spaces are not allowed.' : '');
+    templateError.value = (props.isAlerts && formData.value.destination_type === 'custom' && !formData.value.template) ? 'Template is required!' : '';
+    urlError.value = (formData.value.type === 'http' && !formData.value.url?.trim()) ? 'Field is required!' : '';
+    methodError.value = (formData.value.type === 'http' && !formData.value.method) ? 'Field is required!' : '';
+    outputFormatError.value = (!props.isAlerts && !formData.value.output_format) ? 'Field is required!' : '';
+    const emailRegex = /^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(\s*[;,]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}))*$/;
+    emailsError.value = (formData.value.type === 'email' && (!formData.value.emails || !emailRegex.test(formData.value.emails))) ? 'Add valid emails!' : '';
+    actionError.value = (formData.value.type === 'action' && !formData.value.action_id) ? 'Field is required!' : '';
+    toast({
+      variant: "error",
+      message: "Please fill required fields",
+      timeout: 1500,
+    });
+    return;
+  }
+  const dismiss = toast({
+    variant: "loading",
+    message: "Please wait...",
+      timeout: 0,
+});
+  const headers: Headers = {};
+  apiHeaders.value.forEach((header) => {
+    if (header["key"] && header["value"]) headers[header.key] = header.value;
+  });
+
+  const payload: any = {
+    url: formData.value.url,
+    method: formData.value.method,
+    skip_tls_verify: formData.value.skip_tls_verify,
+    template: props.isAlerts ? formData.value.template : "",
+    headers: headers,
+    name: formData.value.name,
+  };
+
+  if (!props.isAlerts) {
+    payload["output_format"] = formData.value.output_format;
+  }
+
+  if (formData.value.type === "email") {
+    payload["type"] = "email";
+    payload["emails"] = (formData.value?.emails || "")
+      .split(/[;,]/)
+      .map((email: string) => email.trim());
+  }
+
+  if (formData.value.type === "action") {
+    payload["type"] = "action";
+    payload["action_id"] = formData.value.action_id;
+  }
+
+  // if (!props.isAlerts) {
+  //   payload["type"] = "remote_pipeline";
+  // }
+
+  if (isUpdatingDestination.value) {
+    destinationService
+      .update({
+        org_identifier: store.state.selectedOrganization.identifier,
+        destination_name: formData.value.name,
+        data: payload,
+      })
+      .then(() => {
+        dismiss();
+        emit("get:destinations");
+        emit("cancel:hideform");
+        toast({
+          variant: "success",
+          message: t('alert_destinations.saved'),
+        });
+      })
+      .catch((err: any) => {
+        if (err.response?.status == 403) {
+          return;
+        }
+        dismiss();
+        toast({
+          variant: "error",
+          message: err.response?.data?.error || err.response?.data?.message,
+        });
+      });
+    track("Button Click", {
+      button: "Update Destination",
+      page: "Add Destination",
+    });
+  } else {
+    destinationService
+      .create({
+        org_identifier: store.state.selectedOrganization.identifier,
+        destination_name: formData.value.name,
+        data: payload,
+      })
+      .then(() => {
+        dismiss();
+        emit("get:destinations");
+        emit("cancel:hideform");
+        toast({
+          variant: "success",
+          message: t('alert_destinations.saved'),
+        });
+      })
+      .catch((err: any) => {
+        if (err.response?.status == 403) {
+          return;
+        }
+        dismiss();
+        toast({
+          variant: "error",
+          message: err.response?.data?.error || err.response?.data?.message,
+        });
+      });
+    track("Button Click", {
+      button: "Create Destination",
+      page: "Add Destination",
+    });
+  }
+};
+const addApiHeader = (key: string = "", value: string = "") => {
+  apiHeaders.value.push({ key: key, value: value, uuid: getUUID() });
+};
+const deleteApiHeader = (header: any) => {
+  apiHeaders.value = apiHeaders.value.filter(
+    (_header) => _header.uuid !== header.uuid,
+  );
+  if (formData.value?.headers?.[header.key])
+    delete formData.value?.headers?.[header.key];
+  if (!apiHeaders.value.length) addApiHeader();
+};
+
+const createEmailTemplate = () => {
+  router.push({
+    name: "alertTemplates",
+    query: {
+      action: "add",
+      type: "email",
+      org_identifier: store.state.selectedOrganization.identifier,
+    },
+  });
+};
+
+const filterColumns = (options: any[], val: String, update: Function) => {
+  let filteredOptions: any[] = [];
+  if (val === "") {
+    update(() => {
+      filteredOptions = [...options];
+    });
+    return filteredOptions;
+  }
+  update(() => {
+    const value = val?.toLowerCase();
+    filteredOptions = options.filter((column: any) => {
+      if (typeof column === "string")
+        return column?.toLowerCase().indexOf(value) > -1;
+      else {
+        return column?.label?.toLowerCase().indexOf(value) > -1;
+      }
+    });
+  });
+  return filteredOptions;
+};
+
+const filterActions = (val: string, update: any) => {
+  filterColumns(actionOptions.value, val, update);
+};
+</script>
+<style lang="scss" scoped>
+#editor {
+  width: 100%;
+  min-height: 5rem;
+  padding-bottom: 14px;
+  resize: both;
+}
+
+.page-content {
+  height: calc(100vh - 112px);
+}
+</style>
+<style lang="scss">
+.destination-method-select {
+  .q-field__native > :first-child {
+    text-transform: uppercase !important;
+  }
+}
+
+.no-case .q-field__native span {
+  text-transform: none !important;
+}
+
+// Destination Type Selection Grid Styles
+.destination-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.destination-type-card {
+  border: 2px solid var(--o2-border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: var(--o2-card-bg);
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+
+  &:hover {
+    border-color: var(--q-primary);
+    box-shadow: 0 4px 12px rgba(89, 96, 178, 0.15);
+    transform: translateY(-2px);
+  }
+
+  &.selected {
+    border-color: var(--q-primary);
+    background: linear-gradient(
+      135deg,
+      var(--q-primary) 0%,
+      color-mix(in srgb, var(--q-primary) 85%, black) 100%
+    );
+    color: white;
+    box-shadow: 0 4px 16px rgba(89, 96, 178, 0.3);
+
+    .destination-type-label {
+      color: white;
+    }
+  }
+}
+
+.destination-type-content {
+  margin-bottom: 0.75rem;
+}
+
+.destination-type-image {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.destination-type-icon {
+  color: var(--o2-icon-color);
+
+  .selected & {
+    color: white;
+  }
+}
+
+.destination-type-label {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--q-text-primary);
+  margin: 0;
+
+  &.active {
+    color: white;
+  }
+}
+</style>

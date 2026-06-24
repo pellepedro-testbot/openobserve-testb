@@ -1,0 +1,146 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <ODialog data-test="panel-layout-settings-drawer"
+    :open="open"
+    size="sm"
+    :title="t('panel.layout')"
+    :secondary-button-label="t('dashboard.cancel')"
+    :primary-button-label="t('dashboard.save')"
+    @update:open="$emit('update:open', $event)"
+    @click:secondary="$emit('update:open', false)"
+    @click:primary="submitForm()"
+  >
+    <div
+    data-test="panel-layout-settings-content"
+    class="tw:p-0"
+    :class="store.state.theme == 'dark' ? 'dark-mode' : 'tw:bg-white'"
+    style="min-height: inherit"
+  >
+    <div>
+      <div
+        data-test="panel-layout-settings-height"
+        class="o2-input"
+      >
+        <OInput
+          v-model.number="updatedLayout.h"
+          :label="t('dashboard.panelHeight') + ' *'"
+          type="number"
+          style="min-width: 220px"
+          :error-message="heightError"
+          :error="!!heightError"
+          @update:model-value="heightError = ''"
+          data-test="panel-layout-settings-height-input"
+        />
+
+        <div class="tw:text-[12px] tw:flex tw:items-center tw:gap-1 tw:mt-1">
+          <span class="tw:whitespace-nowrap">Approximately <strong>{{ getRowCount }}</strong> table rows will be displayed</span>
+          <OIcon
+            name="info-outline"
+            class="tw:cursor-pointer tw:shrink-0"
+            size="xs"
+           />
+            <OTooltip content="1 unit = 30px" />
+        </div>
+
+     
+      </div>
+    </div>
+  </div>
+  </ODialog>
+</template>
+
+<script lang="ts">
+import { computed, defineComponent, ref } from "vue";
+import { useStore } from "vuex";
+import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
+import { getImageURL } from "../../utils/zincutils";
+import ODialog from "@/lib/overlay/Dialog/ODialog.vue";
+import OInput from "@/lib/forms/Input/OInput.vue";
+import OTooltip from "@/lib/overlay/Tooltip/OTooltip.vue";
+import OIcon from "@/lib/core/Icon/OIcon.vue";
+export default defineComponent({
+  name: "PanelLayoutSettings",
+  components: { ODialog, OInput, OTooltip,
+    OIcon,
+},
+  props: {
+    layout: {
+      type: Object,
+      required: true,
+    },
+    open: {
+      type: Boolean,
+      default: false,
+    },
+  },
+  emits: ["save:layout", "close", "update:open"],
+  setup(props, { emit }) {
+    const store = useStore();
+    const { t } = useI18n();
+    const router = useRouter();
+
+    const updatedLayout = ref({ ...props.layout });
+    const heightError = ref("");
+
+    const savePanelLayout = () => {
+      emit("save:layout", { ...updatedLayout.value });
+    };
+
+    const submitForm = () => {
+      if (!updatedLayout.value.h || updatedLayout.value.h <= 0) {
+        heightError.value = !updatedLayout.value.h
+          ? t("common.required")
+          : t("common.valueMustBeGreaterThanZero");
+        return;
+      }
+      heightError.value = "";
+      savePanelLayout();
+    };
+
+
+    const getRowCount = computed(() => {
+      // 24 is the height of toolbar
+      // 28.5 is the height of each "row"
+      const count = Number(Math.ceil((updatedLayout.value.h * 30 - 24) / 28.5));
+
+      if (count < 0) return 0;
+
+      return count;
+    });
+
+    return {
+      t,
+      store,
+      router,
+      getImageURL,
+      savePanelLayout,
+      submitForm,
+      getRowCount,
+      updatedLayout,
+      heightError,
+    };
+  },
+});
+</script>
+
+<style scoped lang="scss">
+.dark-mode {
+  background-color: $dark-page;
+}
+</style>

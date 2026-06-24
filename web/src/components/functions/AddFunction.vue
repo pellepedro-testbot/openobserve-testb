@@ -1,0 +1,751 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<template>
+  <div class="tw:w-full tw:h-full tw:flex tw:flex-col tw:min-h-0">
+    <FunctionsToolbar
+      v-model:name="formData.name"
+      v-model:trans-type="formData.transType"
+      ref="functionsToolbarRef"
+      :disable-name="beingUpdated"
+      :transform-type-options="transformTypeOptions"
+      @test="onTestFunction"
+      @save="onSubmit"
+      @back="closeAddFunction"
+      @cancel="cancelAddFunction"
+      @open:chat="openChat"
+      :is-add-function-component="isAddFunctionComponent"
+      class="tw:shrink-0 tw:px-2 tw:border-b tw:border-border-default"
+    />
+
+    <div class="tw:flex tw:flex-1 tw:min-h-0">
+      <div
+        class="tw:flex tw:overflow-hidden tw:min-h-0"
+        :class="[
+          store.state.isAiChatEnabled && !isAddFunctionComponent
+            ? 'tw:w-3/4'
+            : 'tw:w-full',
+        ]"
+      >
+        <OSplitter
+          v-model="splitterModel"
+          :limits="[30, 100]"
+          class="tw:overflow-hidden tw:w-full"
+          :horizontal="false"
+          separator-class="tw:w-[0.0625rem] tw:bg-[var(--o2-border-color)]"
+        >
+          <template v-slot:before>
+            <div class="tw:px-2 tw:pt-2 tw:pb-3 card-container tw:h-full tw:flex tw:flex-col tw:min-h-0">
+              <div class="add-function-name-input tw:pb-2 o2-input tw:flex tw:flex-col tw:flex-1 tw:min-h-0">
+                  <FullViewContainer
+                    name="function"
+                    v-model:is-expanded="expandState.functions"
+                    :label="(formData.transType === '1' ? t('function.jsfunction') : t('function.vrlfunction')) + '*'"
+                    min-header-height="2.125rem"
+                  />
+                  <div
+                    v-show="expandState.functions"
+                    class="tw:border tw:solid tw:border-[var(--o2-border-color)] tw:mb-[0.375rem] tw:relative tw:flex-1 tw:min-h-0"
+                  >
+                    <!-- Unified Query Editor (with built-in AI bar) -->
+                    <unified-query-editor
+                      data-test="logs-vrl-function-editor"
+                      data-test-prefix="function-vrl"
+                      ref="editorRef"
+                      :languages="['vrl', 'javascript']"
+                      :default-language="formData.transType === '1' ? 'javascript' : 'vrl'"
+                      :query="formData.function"
+                      :hide-nl-toggle="!store.state.zoConfig.ai_enabled"
+                      :disable-ai="!store.state.zoConfig.ai_enabled"
+                      :disable-ai-reason="''"
+                      :ai-placeholder="t('function.askAIFunctionPlaceholder')"
+                      :ai-tooltip="t('function.enterFunctionPrompt')"
+                      editor-height="100%"
+                      @focus="functionEditorPlaceholderFlag = false"
+                      @blur="functionEditorPlaceholderFlag = true"
+                      @update:query="handleFunctionUpdate"
+                      @language-change="handleLanguageChange"
+                      @toggle-nlp-mode="handleToggleNlpMode"
+                      @generation-start="handleGenerationStart"
+                      @generation-end="handleGenerationEnd"
+                      @generation-success="handleGenerationSuccess"
+                    />
+                    <div
+                      v-if="!formData.function && functionEditorPlaceholderFlag"
+                      class="query-editor-placeholder-overlay"
+                    >
+                      <span class="query-editor-placeholder-typewriter">{{
+                        formData.transType === '1' ? jsPlaceholder : vrlPlaceholder
+                      }}</span>
+                    </div>
+                  </div>
+                  <div class="tw:text-sm tw:font-medium">
+                    <div v-if="vrlFunctionError">
+                      <FullViewContainer
+                        name="function"
+                        v-model:is-expanded="expandState.functionError"
+                        :label="formData.transType === '1' ? t('function.jsErrorDetails') : t('function.errorDetails')"
+                        labelClass="tw:text-red-600 tw:font-semibold"
+                      />
+                      <div
+                        v-if="expandState.functionError"
+                        class="tw:px-2 tw:pb-2 tw:border-l-4 tw:border-red-500"
+                        :class="
+                          store.state.theme === 'dark'
+                            ? 'tw:bg-gray-800'
+                            : 'tw:bg-gray-100'
+                        "
+                      >
+                        <pre class="tw:my-0 tw:text-red-700" :class="store.state.theme === 'dark' ? 'tw:text-red-400' : 'tw:text-red-700'" style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 13px;">{{
+                          vrlFunctionError
+                        }}</pre>
+                      </div>
+                    </div>
+                  </div>
+              </div>
+            </div>
+          </template>
+          <template v-slot:after>
+            <div class="tw:px-2 tw:pt-2 tw:pb-3 tw:h-full tw:overflow-y-auto card-container">
+              <TestFunction
+                ref="testFunctionRef"
+                :vrlFunction="formData"
+                @function-error="handleFunctionError"
+                :heightOffset="heightOffset"
+                @sendToAiChat="sendToAiChat"
+              />
+            </div>
+          </template>
+        </OSplitter>
+      </div>
+      <div
+        v-if="store.state.isAiChatEnabled && !isAddFunctionComponent"
+        :class="[
+          'tw:w-1/4 tw:max-w-full tw:min-w-[75px]',
+          heightOffset ? 'ai-chat-with-offset' : '',
+          store.state.theme == 'dark' ? 'dark-mode-chat-container' : 'light-mode-chat-container',
+        ]"
+      >
+        <O2AIChat
+          class="tw:h-[calc(100vh-(112px+var(--ai-chat-offset,0px)))]"
+          :is-open="store.state.isAiChatEnabled"
+          @close="store.state.isAiChatEnabled = false"
+          :aiChatInputContext="aiChatInputContext"
+        />
+      </div>
+    </div>
+  </div>  
+  <confirm-dialog
+    :title="confirmDialogMeta.title"
+    :message="confirmDialogMeta.message"
+    @update:ok="confirmDialogMeta.onConfirm()"
+    @update:cancel="resetConfirmDialog"
+    v-model="confirmDialogMeta.show"
+  />
+</template>
+
+<script lang="ts">
+import {
+  defineComponent,
+  ref,
+  onMounted,
+  computed,
+  watch,
+  onUnmounted,
+  defineAsyncComponent,
+  nextTick,
+} from "vue";
+
+import jsTransformService from "../../services/jstransform";
+import { useI18n } from "vue-i18n";
+import { useStore } from "vuex";
+import segment from "../../services/segment_analytics";
+import TestFunction from "@/components/functions/TestFunction.vue";
+import FunctionsToolbar from "@/components/functions/FunctionsToolbar.vue";
+import FullViewContainer from "@/components/functions/FullViewContainer.vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import { onBeforeRouteLeave } from "vue-router";
+import O2AIChat from "@/components/O2AIChat.vue";
+import { useRouter } from "vue-router";
+import { useReo } from "@/services/reodotdev_analytics";
+import { toast } from "@/lib/feedback/Toast/useToast";
+import { useVrlPlaceholder, useJsPlaceholder } from "@/composables/useVrlPlaceholder";
+import OSplitter from "@/lib/core/Splitter/OSplitter.vue";
+const defaultValue: any = () => {
+  return {
+    name: "",
+    function: "",
+    params: "row",
+    transType: "0",
+  };
+};
+
+let callTransform: Promise<{ data: any }>;
+
+export default defineComponent({
+  name: "ComponentAddUpdateFunction",
+  props: {
+    modelValue: {
+      type: Object,
+      default: () => defaultValue(),
+    },
+    isUpdated: {
+      type: Boolean,
+      default: false,
+    },
+    heightOffset: {
+      type: Number,
+      default: 0,
+    },
+  },
+  components: {
+    OSplitter,
+    QueryEditor: defineAsyncComponent(
+      () => import("@/components/CodeQueryEditor.vue"),
+    ),
+    UnifiedQueryEditor: defineAsyncComponent(
+      () => import("@/components/QueryEditor.vue"),
+    ),
+    FunctionsToolbar,
+    FullViewContainer,
+    TestFunction,
+    ConfirmDialog,
+    O2AIChat,
+  },
+  emits: ["update:list", "cancel:hideform", "sendToAiChat"],
+  setup(props, { emit }) {
+    const store: any = useStore();
+    const router = useRouter();
+    const { track } = useReo();
+
+    // let beingUpdated: boolean = false;
+    const addJSTransformForm: any = ref(null);    const disableColor: any = ref("");
+    const formData: any = ref({
+      name: "",
+      function: "",
+      params: "row",
+      transType: "0",
+    });
+    const indexOptions = ref([]);
+    const { t } = useI18n();
+    const editorRef: any = ref(null);
+    const functionEditorPlaceholderFlag = ref(true);
+    const { placeholder: vrlPlaceholder } = useVrlPlaceholder();
+    const { placeholder: jsPlaceholder } = useJsPlaceholder();
+    let editorobj: any = null;
+    const streams: any = ref({});
+    const isFetchingStreams = ref(false);
+    const testFunctionRef = ref<typeof TestFunction>();
+    const functionsToolbarRef = ref<typeof FunctionsToolbar>();
+    const splitterModel = ref(50);
+    const aiChatInputContext = ref("");
+    const confirmDialogMeta = ref({
+      title: "",
+      message: "",
+      show: false,
+      onConfirm: () => {},
+      data: null,
+    });
+
+    const expandState = ref({
+      functions: true,
+      functionError: false,
+    });
+
+    const vrlFunctionError = ref("");
+
+    let compilationErr = ref("");
+
+    // Transform type options for radio buttons
+    const transformTypeOptions = computed(() => {
+      const options = [
+        { label: t("function.vrl"), value: "0" },
+      ];
+
+      // JavaScript functions are only allowed in _meta organization (for SSO claim parsing)
+      if (store.state.selectedOrganization.identifier === "_meta") {
+        options.push({ label: t("function.javascript"), value: "1" });
+      }
+
+      return options;
+    });
+
+    const beingUpdated = computed(() => props.isUpdated);
+
+    const streamTypes = ["logs", "metrics", "traces"];
+
+    const isFunctionDataChanged = ref(false);
+    const isAddFunctionComponent = computed(() => router.currentRoute.value.path.includes('functions'))
+
+
+    watch(
+      () => formData.value.name + formData.value.function,
+      () => {
+        isFunctionDataChanged.value = true;
+      },
+    );
+
+    onMounted(() => {
+      window.addEventListener("beforeunload", beforeUnloadHandler);
+    });
+
+    onUnmounted(() => {
+      window.removeEventListener("beforeunload", beforeUnloadHandler);
+    });
+
+    const beforeUnloadHandler = (e: any) => {
+      //check is data updated or not
+      if (isFunctionDataChanged.value) {
+        // Display a confirmation message
+        const confirmMessage = t("dashboard.unsavedMessage"); // Some browsers require a return statement to display the message
+        e.returnValue = confirmMessage;
+        return confirmMessage;
+      }
+      return;
+    };
+
+    let forceSkipBeforeUnloadListener = false;
+
+    onBeforeRouteLeave((to, from, next) => {
+      // check if it is a force navigation, then allow
+      if (forceSkipBeforeUnloadListener) {
+        next();
+        return;
+      }
+      // else continue to warn user
+      const actions = ["add", "update"];
+
+      if (
+        from.path === "/pipeline/functions" &&
+        actions.includes((from.query?.action as string) || "none") &&
+        isFunctionDataChanged.value
+      ) {
+        const confirmMessage = t("pipeline.unsavedMessage");
+        if (window.confirm(confirmMessage)) {
+          // User confirmed, allow navigation
+          next();
+        } else {
+          // User canceled, prevent navigation
+          next(false);
+        }
+      } else {
+        // No unsaved changes or not leaving the edit route, allow navigation
+        next();
+      }
+    });
+
+    const editorUpdate = (e: any) => {
+      formData.value.function = e.target.value;
+    };
+    const prefixCode = ref("");
+    const suffixCode = ref("");
+
+    const isValidParam = () => {
+      const methodPattern = /^[A-Za-z0-9]+(?:,[A-Za-z0-9]+)*$/g;
+      return methodPattern.test(formData.value.params) || "Invalid params.";
+    };
+
+    const isValidMethodName = () => {
+      const methodPattern = /^[$A-Z_][0-9A-Z_$]*$/i;
+      return (
+        methodPattern.test(formData.value.name) || "Invalid Function name."
+      );
+    };
+    const updateEditorContent = () => {
+      // JS functions don't need prefix/suffix, only VRL functions might
+      // For now, both VRL and JS are written as-is
+      prefixCode.value = ``;
+      suffixCode.value = ``;
+
+      formData.value.function = `${prefixCode.value}
+    ${formData.value.function}
+    ${suffixCode.value}`;
+    };
+
+    const isValidFnName = () => {
+      return formData.value.name.trim().length > 0;
+    };
+
+    const onSubmit = () => {
+      if (!functionsToolbarRef.value) return;
+
+      functionsToolbarRef.value.addFunctionForm
+        .validate()
+        .then((valid: any) => {
+          if (!valid) {
+            return false;
+          }
+
+          const loadingNotification = toast({
+            variant: "loading",
+            message: "Please wait...",
+            timeout: 0,
+          });
+
+          try {
+            if (!beingUpdated.value) {
+              formData.value.transType = parseInt(formData.value.transType);
+              // Both VRL and JS use params field (e.g., "row")
+              // No need to clear params for JS
+
+              callTransform = jsTransformService.create(
+                store.state.selectedOrganization.identifier,
+                formData.value,
+              );
+            } else {
+              formData.value.transType = parseInt(formData.value.transType);
+              // Both VRL and JS use params field (e.g., "row")
+              // No need to clear params for JS
+
+              callTransform = jsTransformService.update(
+                store.state.selectedOrganization.identifier,
+                formData.value,
+              );
+            }
+
+            forceSkipBeforeUnloadListener = true;
+
+            callTransform
+              .then((res: { data: any }) => {
+                const data = res.data;
+                const _formData: any = { ...formData.value };
+                formData.value = { ...defaultValue() };
+
+                emit("update:list", _formData);
+
+                loadingNotification();
+                toast({
+                  variant: "success",
+                  message: res.data.message || "Function saved successfully",
+                });
+              })
+              .catch((err) => {
+                compilationErr.value = err?.response?.data["message"];
+                toast({
+                  variant: "error",
+                  message:
+                    err.response?.data?.message ?? "Function creation failed",
+                });
+                loadingNotification();
+              });
+          } catch (error) {
+            console.error("Error while saving function:", error);
+            loadingNotification();
+          }
+
+          segment.track("Button Click", {
+            button: "Save Function",
+            user_org: store.state.selectedOrganization.identifier,
+            user_id: store.state.userInfo.email,
+            function_name: formData.value.name,
+            page: "Add/Update Function",
+          });
+          track("Button Click", {
+            button: "Save Function",
+            page: "Add Function"
+          });
+        });
+    };
+
+    const onTestFunction = () => {
+      if (testFunctionRef.value) testFunctionRef.value.testFunction();
+    };
+
+    const handleFunctionError = (err: string) => {
+      vrlFunctionError.value = err;
+      if (err) {
+        expandState.value.functionError = true;
+      } else {
+        expandState.value.functionError = false;
+      }
+    };
+
+    const closeAddFunction = () => {
+      if (isFunctionDataChanged.value) {
+        confirmDialogMeta.value.show = true;
+        confirmDialogMeta.value.title = t("common.unsavedTitle");
+        confirmDialogMeta.value.message = t("common.unsavedMessage");
+        confirmDialogMeta.value.onConfirm = () => {
+          emit("cancel:hideform");
+          resetConfirmDialog();
+        };
+      } else {
+        emit("cancel:hideform");
+      }
+    };
+
+    const cancelAddFunction = () => {
+      if (isFunctionDataChanged.value) {
+        confirmDialogMeta.value.show = true;
+        confirmDialogMeta.value.title = t("common.cancelTitle");
+        confirmDialogMeta.value.message = t("common.cancelMessage");
+        confirmDialogMeta.value.onConfirm = () => {
+          emit("cancel:hideform");
+          resetConfirmDialog();
+        };
+      } else {
+        emit("cancel:hideform");
+      }
+      track("Button Click", {
+        button: "Cancel Function",
+        page: "Add Function"
+      });
+    };
+
+    const resetConfirmDialog = () => {
+      confirmDialogMeta.value.show = false;
+      confirmDialogMeta.value.title = "";
+      confirmDialogMeta.value.message = "";
+      confirmDialogMeta.value.onConfirm = () => {};
+      confirmDialogMeta.value.data = null;
+    };
+    const openChat = (val: boolean) => {
+        store.dispatch("setIsAiChatEnabled", val);
+    };
+
+    const sendToAiChat = (value: any) => {
+      //this is for when user in pipeline add function page and click on ai chat button
+      //here we reset the value befoere setting it because if user clears the input then again click on the same value it wont trigger the watcher that is there in the child component
+      //so to force trigger we do this
+      aiChatInputContext.value = '';
+      nextTick(() => {
+        aiChatInputContext.value = value;
+      });
+      store.dispatch("setIsAiChatEnabled", true);
+      //this is for when user in functions page and click on ai chat button
+      emit("sendToAiChat", value);
+    };
+
+    // Unified Query Editor: Handle function update
+    const handleFunctionUpdate = (newFunction: string) => {
+      formData.value.function = newFunction;
+    };
+
+    // Unified Query Editor: Handle language change
+    const handleLanguageChange = (newLanguage: 'vrl' | 'javascript') => {
+      console.log('[AddFunction] Language changed to:', newLanguage);
+      // Update transType: '1' for JavaScript, '0' for VRL
+      formData.value.transType = newLanguage === 'javascript' ? '1' : '0';
+    };
+
+    /**
+     * Handle NLP mode toggle from AI icon in editor
+     */
+    const handleToggleNlpMode = () => {
+      console.log('[AddFunction] Toggling NLP mode from AI icon');
+      // UnifiedQueryEditor manages its own NLP mode state internally
+    };
+
+    /**
+     * Handle generation start event from UnifiedQueryEditor
+     */
+    const handleGenerationStart = () => {
+      console.log('[AddFunction] AI generation started');
+      // Can add loading indicators here if needed
+    };
+
+    /**
+     * Handle generation end event from UnifiedQueryEditor
+     */
+    const handleGenerationEnd = () => {
+      console.log('[AddFunction] AI generation ended');
+      // Can remove loading indicators here if needed
+    };
+
+    /**
+     * Handle successful generation from UnifiedQueryEditor
+     */
+    const handleGenerationSuccess = (payload: {type: string, message: string}) => {
+      console.log('[AddFunction] AI generation success:', payload.type);
+      // Function code is already updated via @update:query handler
+    };
+
+    // Unified Query Editor: Handle Ask AI
+    const handleAskAI = async (naturalLanguage: string, language: 'vrl' | 'javascript') => {
+      console.log('[AddFunction] Ask AI for language:', language, 'input:', naturalLanguage);
+
+      // Enable AI chat if not already enabled
+      if (!store.state.isAiChatEnabled) {
+        openChat(true);
+      }
+
+      // The unified component handles AI generation internally
+      // This event is just for parent components that may need to react
+    };
+
+    return {
+      t,
+      emit,
+      disableColor,
+      beingUpdated,
+      formData,
+      store,
+      compilationErr,
+      indexOptions,
+      editorRef,
+      functionEditorPlaceholderFlag,
+      vrlPlaceholder,
+      jsPlaceholder,
+      editorobj,
+      prefixCode,
+      suffixCode,
+      editorUpdate,
+      updateEditorContent,
+      streamTypes,
+      isFetchingStreams,
+      isValidParam,
+      isValidMethodName,
+      onSubmit,
+      expandState,
+      testFunctionRef,
+      onTestFunction,
+      handleFunctionError,
+      vrlFunctionError,
+      functionsToolbarRef,
+      splitterModel,
+      closeAddFunction,
+      confirmDialogMeta,
+      transformTypeOptions,
+      resetConfirmDialog,
+      cancelAddFunction,
+      openChat,
+      isAddFunctionComponent,
+      sendToAiChat,
+      aiChatInputContext,
+      handleFunctionUpdate,
+      handleLanguageChange,
+      handleToggleNlpMode,
+      handleGenerationStart,
+      handleGenerationEnd,
+      handleGenerationSuccess,
+    };
+  },
+  created() {
+    this.formData = { ...defaultValue(), ...this.modelValue };
+    this.beingUpdated = this.isUpdated;
+
+    if (
+      this.modelValue &&
+      this.modelValue.name != undefined &&
+      this.modelValue.name != ""
+    ) {
+      this.beingUpdated = true;
+      this.disableColor = "grey-5";
+      this.formData = this.modelValue;
+      // Ensure transType is a string for radio button binding
+      if (this.formData.transType !== undefined) {
+        this.formData.transType = String(this.formData.transType);
+      }
+    }
+  },
+});
+</script>
+
+<style scoped lang="scss">
+.monaco-editor {
+  width: 100%;
+  border-radius: 5px;
+}
+
+.add-function-name-input {
+  :deep(.q-field--dense .q-field__control) {
+    height: 36px;
+    min-height: auto;
+    border-radius: 3px;
+
+    .q-field__control-container {
+      height: 32px;
+
+      .q-field__native {
+        height: 32px !important;
+      }
+    }
+
+    .q-field__marginal {
+      height: 32px;
+      min-height: auto;
+    }
+  }
+
+  :deep(.q-field__bottom) {
+    padding-top: 4px !important;
+    min-height: auto;
+  }
+}
+
+.function-stream-select-input {
+  :deep(.q-field--auto-height .q-field__control) {
+    height: 32px;
+    min-height: auto;
+
+    .q-field__control-container {
+      height: 32px;
+
+      .q-field__native {
+        min-height: 32px !important;
+        height: 32px !important;
+      }
+    }
+
+    .q-field__marginal {
+      height: 32px;
+      min-height: auto;
+    }
+  }
+}
+
+.functions-duration-input {
+  :deep(.date-time-button) {
+    width: 100%;
+  }
+}
+
+.ai-chat-with-offset {
+  --ai-chat-offset: 75px;
+}
+
+.query-editor-placeholder-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-start;
+  padding: 0.1875rem 0.5rem 0 2.15rem;
+  pointer-events: none;
+  z-index: 1;
+  user-select: none;
+
+  .query-editor-placeholder-typewriter {
+    font-family: monospace;
+    font-size: var(--text-base);
+    line-height: 1.3125rem;
+    color: #a0aec0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+:global(.body--dark) .query-editor-placeholder-overlay .query-editor-placeholder-typewriter {
+  color: #718096;
+}
+</style>
+<style>
+.no-case .q-field__native span {
+  text-transform: none !important;
+}
+</style>

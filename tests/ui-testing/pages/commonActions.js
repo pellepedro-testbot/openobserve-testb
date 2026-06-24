@@ -1,0 +1,540 @@
+import fs from 'fs';
+import path from 'path';
+import { test } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { getAuthHeaders, getOrgIdentifier } from '../playwright-tests/utils/cloud-auth.js';
+import testLogger from '../playwright-tests/utils/test-logger.js';
+
+// Left-nav group flyouts.
+// Several former top-level menu items (pipeline, functions, enrichment tables,
+// ingestion, reports) were moved into hover flyout groups ("Data" and
+// "Dashboards"). The group tile itself is still a navigating link
+// (menu-link-/streams-item, menu-link-/dashboards-item); its absorbed children
+// only appear in a flyout (teleported to <body>) after hovering the tile and
+// carry a new `nav-group-item-<routeName>` data-test.
+//
+// `openNavFlyoutChild` hovers the owning group tile and clicks the child,
+// landing on exactly the same page the old direct menu click used to.
+export const NAV_GROUP_TILE = {
+    data: '[data-test="menu-link-\\/streams-item"]',
+    dashboards: '[data-test="menu-link-\\/dashboards-item"]',
+};
+
+// route `name` of each child within its group (matches navGroups.ts).
+export const NAV_FLYOUT_CHILD = {
+    pipeline: { group: 'data', name: 'pipelines' },
+    functions: { group: 'data', name: 'functionList' },
+    enrichment: { group: 'data', name: 'enrichmentTables' },
+    ingestion: { group: 'data', name: 'ingestion' },
+    streams: { group: 'data', name: 'logstreams' },
+    reports: { group: 'dashboards', name: 'reports' },
+};
+
+/**
+ * Hover a left-nav group tile and click one of its flyout children.
+ * @param {import('@playwright/test').Page} page
+ * @param {keyof typeof NAV_FLYOUT_CHILD} child - logical child key (e.g. 'pipeline')
+ */
+export async function openNavFlyoutChild(page, child) {
+    const entry = NAV_FLYOUT_CHILD[child];
+    if (!entry) throw new Error(`Unknown nav flyout child: ${child}`);
+    const tile = page.locator(NAV_GROUP_TILE[entry.group]);
+    await tile.waitFor({ state: 'visible', timeout: 30000 });
+    const item = page.locator(`[data-test="nav-group-item-${entry.name}"]`);
+    // Opening is hover-driven with a short open delay, and the flyout self-closes
+    // on scroll/resize — so while the page is still settling a single hover can
+    // open it only for it to be closed again before we click. Retry the
+    // open-and-reveal as a unit until the child is actually visible. Move the
+    // pointer away first each attempt so `hover()` always dispatches a fresh
+    // `mouseenter` (a no-op move when already over the tile never re-opens it).
+    await expect(async () => {
+        await page.mouse.move(0, 0);
+        await tile.hover();
+        await expect(item).toBeVisible({ timeout: 2000 });
+    }).toPass({ timeout: 30000 });
+    // The pointer is still over the tile (last hover above), so the flyout stays
+    // open. Force-click the child: a normal click's stability wait gives the
+    // mouseleave close-timer / slide-in animation a window to detach the element
+    // mid-click; force skips that wait and clicks the (already-visible) item
+    // immediately on arrival, before the close timer can fire.
+    await item.click({ force: true });
+}
+
+// Common Locator exports
+export var dateTimeButtonLocator='[data-test="date-time-btn"]';
+export var relative30SecondsButtonLocator='[data-test="date-time-relative-30-s-btn"]';
+export var absoluteTabLocator='[data-test="date-time-absolute-tab"]';
+export var Past30SecondsValue='Past 30 Seconds';
+export var startTimeValue='01:01:01';
+export var endTimeValue='02:02:02';
+export var startDateTimeValue='2024/10/01 01:01:01';
+export var endDateTimeValue='2024/10/01 02:02:02';
+
+export class CommonActions {
+    constructor(page) {
+        this.page = page;
+        
+        // Navigation locators
+        this.alertsMenuItem = '[data-test="menu-link-\\/alerts-item"]';
+        this.settingsMenuItem = '[data-test="menu-link-/settings-item"]';
+        this.homeMenuItem = '[data-test="menu-link-\\/-item"]';
+    }
+
+    async navigateToAlerts() {
+        await this.page.locator(this.alertsMenuItem).click();
+        await this.page.waitForTimeout(2000);
+        // Check for alerts page loaded - use alert list page element
+        await expect(this.page.locator('[data-test="alert-list-page"]')).toBeVisible();
+    }
+
+    async navigateToSettings() {
+        await this.page.locator(this.settingsMenuItem).click();
+        await this.page.waitForTimeout(2000);
+    }
+
+    async navigateToHome() {
+        await this.page.locator(this.homeMenuItem).click();
+        await this.page.waitForTimeout(2000);
+    }
+
+    /**
+     * Helper method to scroll through a dropdown to find and click an option
+     * @param {string} optionName - Name of the option to find
+     * @param {string} optionType - Type of option ('template' or 'folder')
+     * @returns {Promise<boolean>} - Whether the option was found
+     */
+    async scrollAndFindOption(optionName, optionType) {
+        // Target the visible dropdown — OSelect (Reka Listbox) post-migration,
+        // q-select (.q-menu) pre-migration.
+        const dropdown = this.page.locator('[data-test$="-popover"]').first();
+        let optionFound = false;
+        let maxScrolls = 50;
+        let scrollAmount = 1000;
+        let totalScrolled = 0;
+
+        while (!optionFound && maxScrolls > 0) {
+            try {
+                // Try to find and click the option
+                const option = optionType === 'template' 
+                    ? this.page.getByText(optionName, { exact: true })
+                    : this.page.getByRole('option', { name: optionName });
+                
+                if (await option.isVisible()) {
+                    if (optionType === 'template') {
+                        await option.click();
+                    } else {
+                        await option.locator('span').click();
+                    }
+                    optionFound = true;
+                    testLogger.debug(`Found ${optionType} after scrolling: ${optionName}`);
+                    await this.page.waitForTimeout(500);
+                } else {
+                    // Get the current scroll position and height
+                    const { scrollTop, scrollHeight, clientHeight } = await dropdown.evaluate(el => ({
+                        scrollTop: el.scrollTop,
+                        scrollHeight: el.scrollHeight,
+                        clientHeight: el.clientHeight
+                    }));
+
+                    // If we've scrolled to the bottom, start from the top again
+                    if (scrollTop + clientHeight >= scrollHeight) {
+                        await dropdown.evaluate(el => el.scrollTop = 0);
+                        totalScrolled = 0;
+                        await this.page.waitForTimeout(500);
+                    } else {
+                        // Scroll down
+                        await dropdown.evaluate((el, amount) => el.scrollTop += amount, scrollAmount);
+                        totalScrolled += scrollAmount;
+                        await this.page.waitForTimeout(500);
+                    }
+                    maxScrolls--;
+                }
+            } catch (error) {
+                // If option not found, scroll and try again
+                await dropdown.evaluate((el, amount) => el.scrollTop += amount, scrollAmount);
+                totalScrolled += scrollAmount;
+                await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+                maxScrolls--;
+            }
+        }
+
+        if (!optionFound) {
+            testLogger.error(`Failed to find ${optionType} ${optionName} after scrolling ${totalScrolled}px`);
+            throw new Error(`${optionType} ${optionName} not found in dropdown after scrolling`);
+        }
+
+        return optionFound;
+    }
+
+    async ingestTestData(streamName) {
+        const headers = getAuthHeaders();
+        const baseUrl = process.env["ZO_BASE_URL"];
+        const orgName = getOrgIdentifier();
+        const data = [{"level":"info","job":"test","log":"test message for openobserve. this data ingestion has been done using a playwright automation script."}];
+
+        const response = await this.page.request.post(`${baseUrl}/api/${orgName}/${streamName}/_json`, {
+            headers,
+            data
+        });
+        const responseData = await response.json().catch(() => ({ error: 'Failed to parse JSON' }));
+        testLogger.debug('Ingestion response', { response: responseData });
+        testLogger.info('Successfully ingested test data');
+        return responseData;
+    }
+
+    /**
+     * Ingest test data with a unique identifier for alert trigger validation
+     * This allows us to identify specific test data in the validation stream
+     * @param {string} streamName - Name of the stream to ingest data into
+     * @param {string} uniqueId - Unique identifier for this test run (e.g., randomValue)
+     * @param {string} triggerField - Field name that the alert condition will check (default: 'city')
+     * @param {string} triggerValue - Value that will trigger the alert condition (default: 'bangalore')
+     * @returns {Promise<{uniqueId: string, timestamp: number}>}
+     */
+    async ingestTestDataWithUniqueId(streamName, uniqueId, triggerField = 'city', triggerValue = 'bangalore') {
+        const timestamp = Date.now();
+        const testData = {
+            city: triggerField === 'city' ? triggerValue : 'mumbai',
+            country: 'india',
+            status: 'active',
+            age: 25,
+            test_run_id: uniqueId,
+            test_timestamp: timestamp,
+            message: `Alert trigger test - run_id: ${uniqueId}`
+        };
+
+        const headers = getAuthHeaders();
+        const baseUrl = process.env["ZO_BASE_URL"];
+        const orgName = getOrgIdentifier();
+
+        testLogger.debug(`Ingesting test data with unique ID: ${uniqueId}`, { streamName, triggerField, triggerValue });
+
+        const response = await this.page.request.post(`${baseUrl}/api/${orgName}/${streamName}/_json`, {
+            headers,
+            data: [testData]
+        });
+        const responseData = await response.json().catch(() => ({ error: 'Failed to parse JSON' }));
+        testLogger.debug('Ingested test data response', { response: responseData });
+        testLogger.info(`Successfully ingested test data with unique ID: ${uniqueId}`);
+        return { uniqueId, timestamp };
+    }
+
+    /**
+     * Create and initialize a dedicated alert test stream with custom columns
+     * This ensures we have predictable columns for alert condition testing
+     * @param {string} streamName - Name of the stream to create/initialize
+     * @returns {Promise<{streamName: string, columns: string[]}>}
+     */
+    async initializeAlertTestStream(streamName) {
+        const headers = getAuthHeaders();
+        const baseUrl = process.env["ZO_BASE_URL"];
+        const orgName = getOrgIdentifier();
+
+        const initialData = [
+            {
+                city: 'delhi',
+                country: 'india',
+                status: 'inactive',
+                age: 30,
+                test_run_id: 'init',
+                test_timestamp: Date.now(),
+                message: 'Stream initialization record'
+            }
+        ];
+
+        testLogger.info(`Initializing alert test stream: ${streamName}`);
+
+        const response = await this.page.request.post(`${baseUrl}/api/${orgName}/${streamName}/_json`, {
+            headers,
+            data: initialData
+        });
+        const responseData = await response.json().catch(() => ({ error: 'Failed to parse JSON' }));
+        testLogger.debug('Stream initialization response', { response: responseData });
+        testLogger.info(`Successfully initialized stream: ${streamName}`);
+        return {
+            streamName,
+            columns: ['city', 'country', 'status', 'age', 'test_run_id', 'test_timestamp', 'message']
+        };
+    }
+
+    async ingestCustomTestData(streamName) {
+        const headers = getAuthHeaders();
+        const baseUrl = process.env["ZO_BASE_URL"];
+        const orgName = getOrgIdentifier();
+
+        // Read custom test data from file (equivalent to curl -d @utils/td150.json)
+        const dataPath = path.resolve(__dirname, '..', 'utils', 'td150.json');
+        const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
+
+        const response = await this.page.request.post(`${baseUrl}/api/${orgName}/${streamName}/_json`, {
+            headers,
+            data
+        });
+        const responseData = await response.json().catch(() => ({ error: 'Failed to parse JSON' }));
+        testLogger.debug('Custom test data response', { response: responseData });
+        testLogger.info('Successfully ingested custom test data');
+        return responseData;
+    }
+
+    /**
+     * Helper method to conditionally ingest test data based on test title
+     * Skips data ingestion for scheduled alert tests
+     * @param {string} testTitle - The title of the current test
+     * @param {string} streamName - The stream name for data ingestion
+     */
+    async skipDataIngestionForScheduledAlert(testTitle, streamName = 'auto_playwright_stream') {
+        // Skip data ingestion for scheduled alert test
+        if (!testTitle.includes('Scheduled Alert')) {
+            // Ingest test data using common actions
+            await this.ingestTestData(streamName);
+        }
+    }
+
+    // Dismiss any blocking overlays/modals that might intercept clicks
+    async dismissBlockingOverlays() {
+        for (let i = 0; i < 3; i += 1) {
+            const dialog = this.page.locator('[data-test$="-dialog"]');
+            const count = await dialog.count();
+            const visible = count > 0 ? await dialog.first().isVisible().catch(() => false) : false;
+            if (!visible) break;
+            await this.page.locator('body').click({ position: { x: 10, y: 10 } }).catch(() => {});
+            await dialog.first().waitFor({ state: 'hidden', timeout: 1000 }).catch(() => {});
+            await this.page.waitForTimeout(150);
+        }
+    }
+
+    // Return boolean streaming state from Organization settings toggle
+    async getStreamingState() {
+        const root = this.page.locator('[data-test="general-settings-enable-streaming"]').first();
+        await root.waitFor({ state: 'visible', timeout: 10000 });
+        const ariaChecked = await root.getAttribute('aria-checked');
+        return ariaChecked === 'true';
+    }
+
+    // Flip streaming toggle, save, wait for toast, reload, and verify state
+    async flipStreaming() {
+        await this.dismissBlockingOverlays();
+        try {
+            await this.page.locator('[data-test="menu-link-/settings-item"]').click();
+        } catch {
+            await this.page.reload().catch(() => {});
+            await this.page.waitForTimeout(300);
+            await this.dismissBlockingOverlays();
+            await this.page.locator('[data-test="menu-link-/settings-item"]').click();
+        }
+        const isOn = await this.getStreamingState();
+        await this.page.locator('[data-test="general-settings-enable-streaming"] div').nth(2).click();
+        await this.page.locator('[data-test="dashboard-add-submit"]').click();
+        await this.page.getByText('Organization settings updated', { exact: false }).waitFor({ timeout: 15000 });
+        await this.page.reload();
+        const newState = await this.getStreamingState();
+        testLogger.info(`[Streaming Toggle] ${isOn ? 'ON' : 'OFF'} -> ${newState ? 'ON' : 'OFF'}`);
+    }
+
+    /**
+     * Query a stream via OpenObserve API to search for specific data
+     * Used for validating alert triggers by searching the validation_stream
+     * @param {string} streamName - Name of the stream to query
+     * @param {string} searchQuery - SQL query to execute (e.g., "SELECT * FROM stream_name")
+     * @param {number} timeRangeMinutes - How far back to search (default: 15 minutes)
+     * @returns {Promise<{success: boolean, hits: number, data: any[]}>}
+     */
+    async queryStream(streamName, searchQuery = null, timeRangeMinutes = 15) {
+        const headers = getAuthHeaders();
+        const baseUrl = process.env["ZO_BASE_URL"];
+        const orgName = getOrgIdentifier();
+
+        const query = searchQuery || `SELECT * FROM "${streamName}"`;
+
+        const endTime = Date.now() * 1000; // microseconds
+        const startTime = endTime - (timeRangeMinutes * 60 * 1000 * 1000); // microseconds
+
+        const searchPayload = {
+            query: {
+                sql: query,
+                start_time: startTime,
+                end_time: endTime,
+                from: 0,
+                size: 100
+            }
+        };
+
+        try {
+            const response = await this.page.request.post(`${baseUrl}/api/${orgName}/_search?type=logs`, {
+                headers,
+                data: searchPayload
+            });
+            const responseData = await response.json().catch(() => null);
+            const hits = responseData?.hits || [];
+            testLogger.debug(`Query stream ${streamName}: found ${hits.length} results`);
+            return {
+                success: true,
+                hits: hits.length,
+                data: hits
+            };
+        } catch (error) {
+            testLogger.error('Error querying stream', { error: error.message });
+            return { success: false, hits: 0, data: [] };
+        }
+    }
+
+    /**
+     * Search validation stream for alert payloads by unique ID
+     * Used to verify that an alert successfully triggered and sent data
+     * @param {string} validationStreamName - Name of the validation stream to search
+     * @param {string} uniqueId - Unique identifier to search for in the payload
+     * @param {number} maxWaitSeconds - Maximum time to wait for data (default: 60 seconds)
+     * @param {number} pollIntervalSeconds - How often to poll (default: 5 seconds)
+     * @returns {Promise<{found: boolean, payload: any, attempts: number}>}
+     */
+    async waitForAlertInValidationStream(validationStreamName, uniqueId, maxWaitSeconds = 60, pollIntervalSeconds = 5) {
+        const maxAttempts = Math.ceil(maxWaitSeconds / pollIntervalSeconds);
+
+        testLogger.info(`Waiting for "${uniqueId}" in stream "${validationStreamName}" (max ${maxWaitSeconds}s)...`);
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            // Query for recent data containing the search term
+            // Note: The template body is stored in 'text' field, not '_all'
+            const result = await this.queryStream(
+                validationStreamName,
+                `SELECT * FROM "${validationStreamName}" WHERE str_match_ignore_case(text, '${uniqueId}')`,
+                10 // Last 10 minutes
+            );
+
+            if (result.success && result.hits > 0) {
+                testLogger.info(`Found unique ID "${uniqueId}" in validation stream after ${attempt * pollIntervalSeconds}s`);
+                return { found: true, payload: result.data[0], attempts: attempt };
+            }
+
+            if (attempt < maxAttempts) {
+                testLogger.debug(`Attempt ${attempt}/${maxAttempts}: Unique ID not found yet, waiting ${pollIntervalSeconds}s...`);
+                await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
+            }
+        }
+
+        testLogger.warn(`Unique ID "${uniqueId}" not found in validation stream "${validationStreamName}" after ${maxWaitSeconds}s`);
+        return { found: false, payload: null, attempts: maxAttempts };
+    }
+
+    /**
+     * Generate Basic auth header value
+     * @param {string} username
+     * @param {string} password
+     * @returns {string} Basic auth header value
+     */
+    static generateBasicAuthHeader(username, password) {
+        const credentials = Buffer.from(`${username}:${password}`).toString('base64');
+        return `Basic ${credentials}`;
+    }
+
+    /**
+     * Count alert notifications in validation stream
+     * Used for deduplication testing to verify suppression of duplicate alerts
+     * @param {string} validationStreamName - Name of the validation stream to query
+     * @param {string} alertName - Alert name to search for (partial match)
+     * @param {number} timeRangeMinutes - How far back to search (default: 15 minutes)
+     * @returns {Promise<{success: boolean, count: number, data: any[]}>}
+     */
+    async countAlertNotificationsInStream(validationStreamName, alertName, timeRangeMinutes = 15) {
+        const headers = getAuthHeaders();
+        const baseUrl = process.env["ZO_BASE_URL"];
+        const orgName = getOrgIdentifier();
+
+        const query = `SELECT * FROM "${validationStreamName}" WHERE str_match_ignore_case(text, '${alertName}')`;
+
+        const endTime = Date.now() * 1000; // microseconds
+        const startTime = endTime - (timeRangeMinutes * 60 * 1000 * 1000); // microseconds
+
+        const searchPayload = {
+            query: {
+                sql: query,
+                start_time: startTime,
+                end_time: endTime,
+                from: 0,
+                size: 1000
+            }
+        };
+
+        try {
+            const response = await this.page.request.post(`${baseUrl}/api/${orgName}/_search?type=logs`, {
+                headers,
+                data: searchPayload
+            });
+            const responseData = await response.json().catch(() => null);
+            const hits = responseData?.hits || [];
+            testLogger.debug(`Count notifications for "${alertName}" in ${validationStreamName}: found ${hits.length} notifications`);
+            return {
+                success: true,
+                count: hits.length,
+                data: hits
+            };
+        } catch (error) {
+            testLogger.error('Error counting notifications in stream', { error: error.message });
+            return { success: false, count: 0, data: [] };
+        }
+    }
+
+    /**
+     * Wait for exact notification count in validation stream
+     * Used for deduplication testing to verify the expected number of notifications
+     * @param {string} validationStreamName - Name of the validation stream
+     * @param {string} alertName - Alert name to search for
+     * @param {number} expectedCount - Expected number of notifications
+     * @param {number} maxWaitSeconds - Maximum time to wait (default: 120 seconds)
+     * @param {number} pollIntervalSeconds - How often to poll (default: 10 seconds)
+     * @returns {Promise<{match: boolean, actualCount: number, attempts: number}>}
+     */
+    async waitForExactNotificationCount(validationStreamName, alertName, expectedCount, maxWaitSeconds = 120, pollIntervalSeconds = 10) {
+        const maxAttempts = Math.ceil(maxWaitSeconds / pollIntervalSeconds);
+
+        testLogger.info(`Waiting for exactly ${expectedCount} notifications for "${alertName}" in "${validationStreamName}" (max ${maxWaitSeconds}s)...`);
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const result = await this.countAlertNotificationsInStream(validationStreamName, alertName, 15);
+
+            if (result.success && result.count === expectedCount) {
+                testLogger.info(`Found expected ${expectedCount} notifications after ${attempt * pollIntervalSeconds}s`);
+                return { match: true, actualCount: result.count, attempts: attempt };
+            }
+
+            if (result.count > expectedCount) {
+                testLogger.warn(`Found more notifications than expected: ${result.count} > ${expectedCount}`);
+                return { match: false, actualCount: result.count, attempts: attempt };
+            }
+
+            if (attempt < maxAttempts) {
+                testLogger.debug(`Attempt ${attempt}/${maxAttempts}: Found ${result.count} notifications, expected ${expectedCount}, waiting ${pollIntervalSeconds}s...`);
+                await new Promise(resolve => setTimeout(resolve, pollIntervalSeconds * 1000));
+            }
+        }
+
+        const finalResult = await this.countAlertNotificationsInStream(validationStreamName, alertName, 15);
+        testLogger.info(`Final count: ${finalResult.count} notifications (expected ${expectedCount})`);
+        return { match: finalResult.count === expectedCount, actualCount: finalResult.count, attempts: maxAttempts };
+    }
+
+    /**
+     * Find elements containing specific text (case-sensitive)
+     * @param {string} text - Text to search for
+     * @returns {Locator}
+     */
+    getElementsWithText(text) {
+        return this.page.locator(`text="${text}"`);
+    }
+
+    /**
+     * Get page title element (h1, h2, or element with title-related class)
+     * @returns {Locator}
+     */
+    getPageTitle() {
+        return this.page.locator('h1, h2, .page-title, [class*="title"]').first();
+    }
+
+    /**
+     * Get scheduled queries or query management menu item
+     * @returns {Locator}
+     */
+    getQueryManagementMenuItem() {
+        return this.page.locator('[data-test*="scheduled"], [data-test*="query-management"], text=Scheduled, text=Query Management').first();
+    }
+} 

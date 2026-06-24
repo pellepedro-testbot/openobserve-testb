@@ -1,0 +1,145 @@
+<template>
+<div class="tw:flex tw:h-screen">
+  <!-- Left Banner Section -->
+  <div class="tw:hidden lg:tw:flex lg:tw:w-[40%] login_banner_container">
+
+    <div style="display: flex; justify-content: start; align-items: end; height: 100%;">
+    <div style="margin-bottom: 34px; margin-left: 32px;">
+     <span style=" margin-bottom: 12px;"> <img style="height: 40px; margin-left: -1px;" src="@/assets/images/common/openobserve_logo_light.svg" alt="OpenObserve Logo" />
+      </span>
+      <div style="font-size: 24px; color: white; font-weight: 600; line-height:33px; margin-top: 5px; ">
+        Try OpenObserve today for more efficient and performant observability.
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- Right Form Section -->
+  <div :class="[
+    store.state.theme == 'dark' ? 'tw:bg-black' : 'tw:bg-white'
+  ]" class="tw:w-full lg:tw:w-[60%]  tw:h-full tw:flex tw:flex-col tw:justify-center tw:items-center tw:relative">
+
+    <!-- Top Section: Logo and Heading -->
+    <div class="tw:flex tw:flex-col tw:items-center tw:mb-4">
+      <img style="height: 64px;" src="@/assets/images/common/o2_logo.svg" alt="Get Started Banner" />
+      <div class="tw:text-[24px] md:tw:text-[32px] tw:font-semibold  tw:text-center" 
+      :class="[
+        store.state.theme == 'dark' ? 'tw:text-[#ffffff]' : 'tw:text-[#525252]'
+      ]"
+      >
+        One last thing before we begin
+      </div>
+    </div>
+
+    <!-- Form Section -->
+<!-- Form Section -->
+<div class="tw:w-full tw:flex tw:justify-center">
+  <div class="tw:w-full tw:max-w-[500px] tw:flex tw:flex-col tw:items-center tw:gap-y-2 tw:px-4">
+    <OForm ref="formRef" :schema="getStartedSchema" :default-values="getStartedDefaults()" @submit="doSubmit" v-slot="{ isSubmitting }" class="tw:w-full tw:flex tw:flex-col tw:gap-y-2">
+    <OFormInput
+      name="hearAboutUs"
+      data-test="onboarding-get-started-hear-about-us"
+      class="o2-input"
+      label="How did you hear about us?"
+      required
+      placeholder="Eg. From a friend"
+      style="width: 100%;"
+    />
+    <OFormInput
+      name="whereDoYouWork"
+      data-test="onboarding-get-started-where-do-you-work"
+      class="tw:-mt-2"
+      label="Where do you work?"
+      required
+      placeholder="Company Name"
+      style="width: 100%;"
+    />
+    <div class="tw:w-full">
+      <OFormCheckbox name="isAgree" data-test="onboarding-get-started-agree-checkbox">
+        <template #label>
+          <span class="tw:text-sm">
+            I have read and agree with the
+            <a href="#" class="tw:text-[#6B76E3] hover:underline">Terms of use</a> and
+            <a href="#" class="tw:text-[#6B76E3] hover:underline">Privacy policy*</a>
+          </span>
+        </template>
+      </OFormCheckbox>
+    </div>
+    <div class="tw:w-full tw:mt-4">
+      <OButton
+        data-test="onboarding-get-started-submit-btn"
+        variant="primary"
+        size="md"
+        block
+        :disabled="isSubmitting"
+        :loading="isSubmitting"
+        type="submit"
+      >
+        Start your 14-day Trial
+      </OButton>
+    </div>
+    </OForm>
+  </div>
+</div>
+
+
+    <!-- Footer -->
+    <div class="tw:absolute tw:bottom-5 tw:text-sm tw:mb-[16px]" 
+    :class="[
+      store.state.theme == 'dark' ? 'tw:text-[#ffffff]' : 'tw:text-[#767676]'
+    ]"
+    >
+      &copy; OpenObserve <span id="year">{{ new Date().getFullYear() }}</span>
+    </div>
+  </div>
+</div>
+
+</template>
+
+<script setup>
+import { ref } from 'vue'
+import OButton from '@/lib/core/Button/OButton.vue'
+import OForm from '@/lib/forms/Form/OForm.vue'
+import OFormInput from '@/lib/forms/Input/OFormInput.vue'
+import OFormCheckbox from '@/lib/forms/Checkbox/OFormCheckbox.vue'
+import { getStartedSchema, getStartedDefaults } from './GetStarted.schema'
+import { useStore } from 'vuex'
+  import billings from '@/services/billings'
+import { toast } from "@/lib/feedback/Toast/useToast";
+const store = useStore()
+const emit = defineEmits(['removeFirstTimeLogin'])
+const formRef = ref(null);
+
+const doSubmit = async (value) => {
+  const res = await billings.submit_new_user_info(store.state.selectedOrganization.identifier, {
+    from: value.hearAboutUs,
+    company: value.whereDoYouWork,
+  })
+  if(res.status == 200) {
+    localStorage.removeItem("isFirstTimeLogin");
+    emit("removeFirstTimeLogin",false);
+    toast({
+      message: 'Thank you for your feedback',
+      variant: 'success',
+    })
+  } else {
+    toast({
+      message: 'Something went wrong',
+      variant: 'error',
+    })
+  }
+}
+</script>
+
+<style lang="scss">
+.login_banner_container {
+  background-image: url('@/assets/images/common/openobserve_banner_compreesed.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+</style>
+
+<style lang="scss" scoped>
+
+</style>

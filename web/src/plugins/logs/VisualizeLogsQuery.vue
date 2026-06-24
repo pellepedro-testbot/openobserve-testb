@@ -1,0 +1,324 @@
+<!-- Copyright 2026 OpenObserve Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<!-- eslint-disable vue/no-unused-components -->
+<template>
+  <div style="height: 100%; width: 100%">
+    <!-- PanelEditor Content Area (no header for logs visualization) -->
+    <PanelEditor
+      ref="panelEditorRef"
+      pageType="logs"
+      :editMode="true"
+      :dashboardData="{}"
+      :variablesData="{}"
+      :selectedDateTime="dashboardPanelData.meta.dateTime"
+      :externalChartData="chartData"
+      :searchResponse="searchResponse"
+      :isUiHistogram="is_ui_histogram"
+      :shouldRefreshWithoutCache="shouldRefreshWithoutCache"
+      :regionClusterParams="regionClusterParams"
+      :allowedChartTypes="allowedChartTypes"
+      @addToDashboard="addToDashboard"
+      @chartApiError="handleChartApiError"
+      @searchRequestTraceIdsUpdated="handleSearchRequestTraceIdsUpdated"
+    />
+
+    <!-- Add to Dashboard Dialog -->
+    <add-to-dashboard
+      v-model:open="showAddToDashboardDialog"
+      :dashboardPanelData="dashboardPanelData"
+      @save="addPanelToDashboard"
+    />
+  </div>
+</template>
+
+<script lang="ts">
+import {
+  defineComponent,
+  ref,
+  watch,
+  defineAsyncComponent,
+  computed,
+} from "vue";
+import { useI18n } from "vue-i18n";
+import { useStore } from "vuex";
+import useDashboardPanelData from "@/composables/dashboard/useDashboardPanel";
+import { provide, inject, toRefs, onActivated } from "vue";
+import useNotifications from "@/composables/useNotifications";
+import { isSimpleSelectAllQuery } from "@/utils/query/sqlUtils";
+import { useSearchStream } from "@/composables/useLogs/useSearchStream";
+import { searchState } from "@/composables/useLogs/searchState";
+import { PanelEditor } from "@/components/dashboards/PanelEditor";
+
+const AddToDashboard = defineAsyncComponent(() => {
+  return import("./../metrics/AddToDashboard.vue");
+});
+
+export default defineComponent({
+  name: "VisualizeLogsQuery",
+  props: {
+    visualizeChartData: {
+      type: Object,
+      required: true,
+    },
+    errorData: {
+      type: Object,
+      required: true,
+    },
+    searchResponse: {
+      type: Object,
+      required: false,
+    },
+    is_ui_histogram: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
+    shouldRefreshWithoutCache: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
+    histogramQuery: {
+      type: String,
+      required: false,
+      default: "",
+    },
+  },
+  components: {
+    AddToDashboard,
+    PanelEditor,
+  },
+  emits: ["handleChartApiError", "searchRequestTraceIdsUpdated"],
+  setup(props, { emit }) {
+    const dashboardPanelDataPageKey = inject(
+      "dashboardPanelDataPageKey",
+      "logs",
+    );
+    const { t } = useI18n();
+    const store = useStore();
+    const { dashboardPanelData, resetAggregationFunction, validatePanel } =
+      useDashboardPanelData(dashboardPanelDataPageKey);
+    const resultMetaData = ref(null);
+
+    const { showErrorNotification } = useNotifications();
+
+    const { searchObj } = searchState();
+    const { buildSearch } = useSearchStream();
+
+    const regionClusterParams = computed(() => {
+      if (store.state.zoConfig?.super_cluster_enabled) {
+        return {
+          regions: searchObj.meta.regions,
+          clusters: searchObj.meta.clusters,
+        };
+      }
+      return undefined;
+    });
+
+    const {
+      visualizeChartData,
+      is_ui_histogram,
+      shouldRefreshWithoutCache,
+    }: any = toRefs(props);
+    const chartData = ref(visualizeChartData.value);
+
+    const showAddToDashboardDialog = ref(false);
+
+    // PanelEditor ref for accessing exposed methods/properties
+    const panelEditorRef = ref<InstanceType<typeof PanelEditor> | null>(null);
+
+    // Allowed chart types for logs visualization
+    const allowedChartTypes = [
+      "area",
+      "bar",
+      "h-bar",
+      "line",
+      "scatter",
+      "table",
+    ];
+
+    // Watch for external chart data changes
+    watch(
+      () => visualizeChartData.value,
+      async () => {
+        chartData.value = JSON.parse(JSON.stringify(visualizeChartData.value));
+      },
+      { deep: true },
+    );
+
+    // Handle chart type change with validation
+    const handleChartTypeChange = (newType: string) => {
+      // Get the actual logs page query, handling SQL mode
+      let logsPageQuery = "";
+
+      // Handle sql mode - same as in Index.vue
+      if (!searchObj.meta.sqlMode) {
+        const queryBuild = buildSearch();
+        logsPageQuery = queryBuild?.query?.sql ?? "";
+      } else {
+        logsPageQuery = searchObj.data.query;
+      }
+
+      // Check if query is SELECT * and trying to switch chart type
+      if (
+        store.state.zoConfig.quick_mode_enabled === true &&
+        isSimpleSelectAllQuery(logsPageQuery)
+      ) {
+        showErrorNotification(
+          "Select * query is not supported for visualization.",
+        );
+        // Prevent the change by not updating the type
+        return;
+      }
+
+      // If validation passes, proceed with the change
+      dashboardPanelData.data.type = newType;
+      resetAggregationFunction();
+    };
+
+    const handleChartApiError = (errorMsg: any) => {
+      if (typeof errorMsg === "string") {
+        const errorList = props.errorData.errors ?? [];
+        errorList.splice(0);
+        errorList.push(errorMsg);
+      } else if (errorMsg?.message) {
+        const errorList = props.errorData.errors ?? [];
+        errorList.splice(0);
+        errorList.push(errorMsg.message);
+        props.errorData.value = errorMsg?.message ?? "";
+      }
+
+      emit("handleChartApiError", errorMsg);
+    };
+
+    // Forward search request trace IDs to parent for cancel query functionality
+    const handleSearchRequestTraceIdsUpdated = (traceIds: string[]) => {
+      emit("searchRequestTraceIdsUpdated", traceIds);
+    };
+
+    // Provide hovered series state for child components
+    const hoveredSeriesState = ref({
+      hoveredSeriesName: "",
+      panelId: -1,
+      dataIndex: -1,
+      seriesIndex: -1,
+      hoveredTime: null,
+      setHoveredSeriesName: function (name: string) {
+        hoveredSeriesState.value.hoveredSeriesName = name ?? "";
+      },
+      setIndex: function (
+        dataIndex: number,
+        seriesIndex: number,
+        panelId: any,
+        hoveredTime?: any,
+      ) {
+        hoveredSeriesState.value.dataIndex = dataIndex ?? -1;
+        hoveredSeriesState.value.seriesIndex = seriesIndex ?? -1;
+        hoveredSeriesState.value.panelId = panelId ?? -1;
+        hoveredSeriesState.value.hoveredTime = hoveredTime ?? null;
+      },
+    });
+
+    provide("hoveredSeriesState", hoveredSeriesState);
+
+    const addToDashboard = () => {
+      // Get result metadata from PanelEditor if available
+      const panelResultMetaData = panelEditorRef.value?.metaData?.value;
+
+      // Check for histogram query - prioritize sources in order of reliability
+      if (is_ui_histogram.value === true) {
+        // First priority: use the stored histogram query prop (most reliable - persists across state changes)
+        if (props.histogramQuery) {
+          dashboardPanelData.data.queries[0].query = props.histogramQuery;
+        } else if (searchObj.data.queryResults?.converted_histogram_query) {
+          // Fallback: check searchObj.data.queryResults
+          dashboardPanelData.data.queries[0].query =
+            searchObj.data.queryResults.converted_histogram_query;
+        } else if (props.searchResponse?.converted_histogram_query) {
+          // Fallback: check searchResponse (from logs search API)
+          dashboardPanelData.data.queries[0].query =
+            props.searchResponse.converted_histogram_query;
+        } else if (panelResultMetaData?.[0]?.[0]?.converted_histogram_query) {
+          // Fallback: check panelResultMetaData (new format)
+          dashboardPanelData.data.queries[0].query =
+            panelResultMetaData?.[0]?.[0]?.converted_histogram_query;
+        } else if (
+          // Fallback: check panelResultMetaData (old format)
+          panelResultMetaData?.[0]?.converted_histogram_query &&
+          !Array.isArray(panelResultMetaData?.[0])
+        ) {
+          dashboardPanelData.data.queries[0].query =
+            panelResultMetaData?.[0]?.converted_histogram_query;
+        }
+      }
+
+      const errors: any = [];
+      // will push errors in errors array
+      validatePanel(errors, true);
+
+      if (errors.length) {
+        // set errors into errorData
+        props.errorData.errors = errors;
+        showErrorNotification(
+          "There are some errors, please fix them and try again",
+        );
+        return;
+      } else {
+        showAddToDashboardDialog.value = true;
+      }
+    };
+
+    const addPanelToDashboard = () => {
+      showAddToDashboardDialog.value = false;
+    };
+
+    onActivated(() => {
+      dashboardPanelData.layout.querySplitter = 20;
+
+      // keep field list closed for visualization
+      dashboardPanelData.layout.showFieldList = false;
+      dashboardPanelData.layout.splitter = 0;
+    });
+
+    return {
+      t,
+      dashboardPanelData,
+      handleChartApiError,
+      handleSearchRequestTraceIdsUpdated,
+      resetAggregationFunction,
+      store,
+      chartData,
+      showAddToDashboardDialog,
+      addPanelToDashboard,
+      addToDashboard,
+      is_ui_histogram,
+      shouldRefreshWithoutCache,
+      hoveredSeriesState,
+      resultMetaData,
+      isSimpleSelectAllQuery,
+      handleChartTypeChange,
+      panelEditorRef,
+      allowedChartTypes,
+      regionClusterParams,
+    };
+  },
+});
+</script>
+
+<style lang="scss" scoped>
+@import "@/styles/logs/visualizelogs-query.scss";
+</style>
