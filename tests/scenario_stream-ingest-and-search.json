@@ -1,0 +1,54 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "[{\"level\": \"info\", \"message\": \"testbot-smoke-test\", \"service\": \"testbot\"}]",
+    "ResponseBody": "{\"status\": [{\"name\": \"teststream\", \"successful\": 1, \"failed\": 0}]}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "POST",
+    "Path": "/api/default/teststream/_json",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-24T23:26:28.743Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "{\"query\": {\"sql\": \"SELECT * FROM teststream WHERE message='testbot-smoke-test' LIMIT 10\", \"start_time\": 0, \"end_time\": 0, \"from\": 0, \"size\": 10}}",
+    "ResponseBody": "{\"hits\": [], \"total\": 0, \"took\": 0}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "POST",
+    "Path": "/api/default/_search",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-24T23:26:28.743Z",
+    "Scheme": "http"
+  }
+]
