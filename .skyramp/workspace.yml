@@ -15,7 +15,7 @@ workspace:
   repoUrl: https://github.com/pellepedro-testbot/openobserve-testb
 metadata:
   schemaVersion: v1
-  mcpVersion: 0.0.64
+  mcpVersion: 0.2.7
   executorVersion: v1.3.27
 services:
   - serviceName: openobserve-testb-backend
