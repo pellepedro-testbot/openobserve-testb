@@ -205,6 +205,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <ODialog data-test="log-stream-delete-dialog"
       v-model:open="confirmDelete"
       size="sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="oo-delete-stream-title"
       :title="t('logStream.confirmDeleteHead')"
       :secondary-button-label="t('logStream.cancel')"
       :primary-button-label="t('logStream.ok')"
@@ -213,6 +216,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       @click:primary="() => { deleteStream(); confirmDelete = false; }"
     >
       <div class="tw:flex tw:flex-col tw:gap-3 tw:py-1">
+        <h2 id="oo-delete-stream-title" class="tw:sr-only">
+          {{ t("logStream.confirmDeleteHead") }}
+        </h2>
         <p class="tw:text-sm">{{ t("logStream.confirmDeleteMsg") }}</p>
         <div
           class="tw:w-full tw:flex tw:items-center tw:gap-2 tw:text-sm tw:text-gray-500"
