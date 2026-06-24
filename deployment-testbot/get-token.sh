@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Print a bearer token for the SUT. Tuned for Mealie default admin.
-# Default credentials come from mealie/core/settings/settings.py:
-#   _DEFAULT_EMAIL    = "changeme@example.com"
-#   _DEFAULT_PASSWORD = "MyPassword"
-# Auth endpoint: POST /api/auth/token  (application/x-www-form-urlencoded)
+# Print the auth token for the SUT. OpenObserve uses HTTP Basic auth on /api
+# endpoints, so the "token" is base64("<email>:<password>"); workspace.yml sets
+# authType: basic / authScheme: Basic so the executor sends
+#   Authorization: Basic <token>
+# Default root credentials come from deployment-testbot/docker-compose.yml:
+#   ZO_ROOT_USER_EMAIL    = root@example.com
+#   ZO_ROOT_USER_PASSWORD = Complexpass#123
 set -euo pipefail
-USER="${MEALIE_ADMIN_EMAIL:-changeme@example.com}"
-PASS="${MEALIE_ADMIN_PASSWORD:-MyPassword}"
-curl -sf -m 10 -X POST http://localhost:9000/api/auth/token \
-  -H 'Content-Type: application/x-www-form-urlencoded' \
-  --data-urlencode "username=$USER" --data-urlencode "password=$PASS" \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])"
+USER="${ZO_ROOT_USER_EMAIL:-root@example.com}"
+PASS="${ZO_ROOT_USER_PASSWORD:-Complexpass#123}"
+printf '%s:%s' "$USER" "$PASS" | base64 | tr -d '\n'

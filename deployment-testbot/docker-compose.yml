@@ -1,24 +1,32 @@
-# docker-compose.yml.tmpl — rendered into the cloned repo's deployment-testbot/
-# Mealie facts (verified 2026-06-13):
-#   Dockerfile:  docker/Dockerfile  (build target: production, context: ../)
-#   Port:        9000 (APP_PORT default; mapped 9000→9000 for testbot)
-#   Health:      GET /api/app/about
-#   Default creds: changeme@example.com / MyPassword (settings.py defaults)
+# docker-compose.yml — builds the OpenObserve SUT from source for testbot.
+# OpenObserve facts (verified 2026-06-23):
+#   Dockerfile:  deploy/build/Dockerfile  (multi-stage: web build + cargo --release)
+#   Context:     repo root (Dockerfile does `COPY . /openobserve` + `COPY ./web`)
+#   Port:        5080 (ZO_HTTP_PORT default; binary serves API + embedded web UI)
+#   Health:      GET /healthz  -> 200 {"status":"ok"}  (no auth)
+#   Default org: "default"  (routes are /api/{org_id}/...)
+#   Root creds:  ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD (HTTP Basic on /api)
+#   OpenAPI:     /api-doc/openapi.json  (needs ZO_SWAGGER_ENABLED=true)
 #
-# UPSTREAM_CHECKOUT: path to the cloned Mealie source tree.
+# NOTE: the from-source build is heavy (large Rust workspace release build + an
+# 8GB-memory Vue build). This is the known runtime risk for the baseline.
+#
+# UPSTREAM_CHECKOUT: path to the cloned OpenObserve source tree.
 # Defaults to ../  (one level up from deployment-testbot/, i.e. the repo root).
 services:
-  mealie:
+  openobserve:
     build:
       context: ${UPSTREAM_CHECKOUT:-../}
-      dockerfile: docker/Dockerfile
-      target: production
-    container_name: mealie-testb
+      dockerfile: deploy/build/Dockerfile
+    container_name: openobserve-testb
     ports:
-      - "9000:9000"
+      - "5080:5080"
     environment:
-      - BASE_URL=http://localhost:9000
-      - ALLOW_SIGNUP=false
-      - DEFAULT_EMAIL=changeme@example.com
-      - DEFAULT_PASSWORD=MyPassword
-      - DB_ENGINE=sqlite
+      - ZO_ROOT_USER_EMAIL=root@example.com
+      - ZO_ROOT_USER_PASSWORD=Complexpass#123
+      - ZO_LOCAL_MODE=true
+      - ZO_HTTP_PORT=5080
+      - ZO_HTTP_ADDR=0.0.0.0
+      - ZO_DATA_DIR=/data/
+      - ZO_SWAGGER_ENABLED=true
+      - RUST_LOG=info
