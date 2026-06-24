@@ -1,0 +1,41 @@
+name: Skyramp Testbot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  testbot:
+    runs-on: ubuntu-latest
+    # Never let Dependabot trigger this job (defense-in-depth; Dependabot is also disabled org-wide).
+    # Testbot eval PRs (opened by a human/owner) still trigger normally.
+    if: >-
+      github.actor != 'dependabot[bot]' && (
+        github.event_name != 'issue_comment' ||
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # NOTE: testbot v0.10.x action inputs are camelCase (older v0.5.x used snake_case).
+      # 'test_directory' is NOT an input in v0.10.x — the test dir comes from .skyramp/workspace.yml.
+      - uses: skyramp/testbot@v0.10.5
+        with:
+          skyrampLicenseFile: ${{ secrets.SKYRAMP_LICENSE_FILE }}
+          anthropicApiKey: ${{ secrets.ANTHROPIC_API_KEY }}
+          targetSetupCommand: './deployment-testbot/setup.sh'
+          targetReadyCheckCommand: 'curl -f http://localhost:5080/healthz'
+          targetReadyCheckTimeout: 300
+          authTokenCommand: './deployment-testbot/get-token.sh'
+          autoCommit: true
+          postPrComment: true

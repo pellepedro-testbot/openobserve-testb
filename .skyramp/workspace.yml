@@ -1,0 +1,46 @@
+# Skyramp Workspace Configuration for OpenObserve eval.
+# OpenObserve is a Rust/Axum backend + Vue 3 frontend, both served by a single
+# binary on :5080 (the web UI is embedded at /web).
+#
+# Test-language decision (baseline): black-box HTTP. The backend is Rust, but
+# testbot does not generate Rust tests, so API tests are generated as Python
+# pytest hitting the running API over HTTP. UI tests are Playwright/TS.
+#
+# Auth: OpenObserve uses HTTP Basic on /api endpoints. get-token.sh emits the
+# base64 of "<email>:<password>"; authType: basic + authScheme: Basic makes the
+# executor send `Authorization: Basic <token>`. Root creds come from the
+# ZO_ROOT_USER_* env in deployment-testbot/docker-compose.yml.
+workspace:
+  repoName: pellepedro-testbot/openobserve-testb
+  repoUrl: https://github.com/pellepedro-testbot/openobserve-testb
+metadata:
+  schemaVersion: v1
+  mcpVersion: 0.2.7
+  executorVersion: v1.3.27
+services:
+  - serviceName: openobserve-testb-backend
+    language: python
+    framework: pytest
+    testDirectory: tests
+    api:
+      schemaPath: http://localhost:5080/api-doc/openapi.json
+      authType: basic
+      authHeader: Authorization
+      authScheme: Basic
+      baseUrl: http://localhost:5080
+    runtimeDetails:
+      serverStartCommand: docker compose -f deployment-testbot/docker-compose.yml up -d --build
+      runtime: docker
+      dockerNetwork: deployment-testbot_default
+  - serviceName: openobserve-testb-web
+    language: typescript
+    framework: playwright
+    testDirectory: web/tests
+    api:
+      baseUrl: http://localhost:5080/web
+      authType: none
+      authHeader: ""
+    runtimeDetails:
+      serverStartCommand: docker compose -f deployment-testbot/docker-compose.yml up -d --build
+      runtime: docker
+      dockerNetwork: deployment-testbot_default
