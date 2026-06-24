@@ -1,0 +1,80 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "{\"title\": \"Testbot Dashboard\", \"description\": \"Dashboard created by Skyramp Testbot\", \"tabs\": []}",
+    "ResponseBody": "{\"dashboard_id\": \"1\", \"title\": \"Testbot Dashboard\"}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "POST",
+    "Path": "/api/default/dashboards",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-24T23:26:32.259Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"dashboard_id\": \"1\", \"title\": \"Testbot Dashboard\"}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/dashboards/1",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-24T23:26:32.259Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "DELETE",
+    "Path": "/api/default/dashboards/1",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-24T23:26:32.259Z",
+    "Scheme": "http"
+  }
+]
