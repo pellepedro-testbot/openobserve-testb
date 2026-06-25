@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   testbot:
@@ -39,3 +39,4 @@ jobs:
           authTokenCommand: './deployment-testbot/get-token.sh'
           autoCommit: true
           postPrComment: true
+
