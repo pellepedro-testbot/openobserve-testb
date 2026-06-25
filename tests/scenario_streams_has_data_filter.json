@@ -1,0 +1,58 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "[{\"message\": \"test log entry for has_data filter\", \"level\": \"info\"}]",
+    "ResponseBody": "{\"status\": 200}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "POST",
+    "Path": "/api/default/test_has_data_filter/_json",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-24T23:53:35.504Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"list\": [{\"name\": \"test_has_data_filter\", \"stream_type\": \"logs\"}], \"total\": 1}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {
+      "has_data": [
+        "true"
+      ]
+    },
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-24T23:53:35.504Z",
+    "Scheme": "http"
+  }
+]
