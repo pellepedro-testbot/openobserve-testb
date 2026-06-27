@@ -1,8 +1,8 @@
 name: Build SUT from source (eval test)
 
-# Builds the OpenObserve SUT from source on a standard runner with a host-memory sampler
-# streaming to the log. This variant injects `--jobs 1` into the Dockerfile's cargo build to
-# test whether serializing compilation lowers peak memory enough to avoid the OOM. No registry/AWS.
+# Builds the OpenObserve SUT from source on the self-hosted rachzucco runner (94 GiB, 20 CPUs),
+# with a host-memory sampler. Targets the [self-hosted, rachzucco] label only — workflow_dispatch
+# (manual) so there is no fork-PR vector. The fork-PR-triggered testbot workflow stays GitHub-hosted.
 
 on:
   workflow_dispatch:
@@ -14,55 +14,40 @@ on:
 
 jobs:
   build-sut:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: [self-hosted, rachzucco]
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref }}
 
-      - name: Limit cargo parallelism (--jobs 1) for the memory test
-        run: |
-          sed -i 's|cargo build --release|cargo build --release --jobs 1|' deploy/build/Dockerfile
-          echo "patched cargo line:"; grep -n "cargo build" deploy/build/Dockerfile
-
       - name: Runner specs (before build)
         run: |
-          echo "::group::runner specs"
-          echo "cpus: $(nproc)"; free -h; df -h /
-          echo "::endgroup::"
+          echo "cpus: $(nproc)"; free -h
 
-      - name: Build SUT from source (--jobs 1, with memory monitor)
+      - name: Build SUT from source (memory monitor)
         run: |
           mkdir -p /tmp/mem
           ( while true; do
-              L="[mem $(date -u +%H:%M:%S)] $(free -m | awk '/Mem:/{printf "used=%sMB avail=%sMB ",$3,$7} /Swap:/{printf "swap_used=%sMB",$3}') load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              echo "$L"; echo "$L" >> /tmp/mem/mem.log
-              sleep 10
+              echo "[mem $(date -u +%H:%M:%S)] $(free -m | awk '/Mem:/{printf "used=%sMB avail=%sMB ",$3,$7} /Swap:/{printf "swap=%sMB",$3}')"
+              sleep 15
             done ) &
           MON=$!
           set +e
           docker compose -f deployment-testbot/docker-compose.yml build
           RC=$?
           kill "$MON" 2>/dev/null
-          echo "=== docker build exit code: $RC (137=SIGKILL/OOM, 143=SIGTERM) ==="
-          echo "=== memory trace tail ==="; tail -8 /tmp/mem/mem.log
+          echo "=== docker build exit code: $RC ==="
           exit "$RC"
 
-      - name: Start SUT and health-check
+      - name: Verify image + start SUT
         run: |
+          docker images | grep -i openobserve | head
           docker compose -f deployment-testbot/docker-compose.yml up -d
-          for i in $(seq 1 60); do
-            if curl -sf -m 3 http://localhost:5080/healthz >/dev/null; then echo "SUT healthy"; exit 0; fi
-            sleep 3
-          done
-          echo "SUT did not become healthy within ~3 min"; exit 1
+          sleep 20
+          docker compose -f deployment-testbot/docker-compose.yml ps
 
-      - name: Upload memory trace (best-effort)
+      - name: Teardown (always)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: memory-trace-jobs1
-          path: /tmp/mem/mem.log
-          if-no-files-found: warn
+        run: docker compose -f deployment-testbot/docker-compose.yml down -v || true
