@@ -1,8 +1,8 @@
 name: Build SUT from source (eval test)
 
-# Builds the OpenObserve SUT from source (deploy/build/Dockerfile) on a standard runner,
-# while continuously sampling host memory to the live log (and a best-effort artifact) so a
-# memory-exhaustion failure is captured as OBSERVED data, not inferred. No registry/AWS.
+# Builds the OpenObserve SUT from source on a standard runner with a host-memory sampler
+# streaming to the log. This variant injects `--jobs 1` into the Dockerfile's cargo build to
+# test whether serializing compilation lowers peak memory enough to avoid the OOM. No registry/AWS.
 
 on:
   workflow_dispatch:
@@ -15,29 +15,30 @@ on:
 jobs:
   build-sut:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref }}
 
+      - name: Limit cargo parallelism (--jobs 1) for the memory test
+        run: |
+          sed -i 's|cargo build --release|cargo build --release --jobs 1|' deploy/build/Dockerfile
+          echo "patched cargo line:"; grep -n "cargo build" deploy/build/Dockerfile
+
       - name: Runner specs (before build)
         run: |
           echo "::group::runner specs"
-          echo "cpus: $(nproc)"
-          free -h
-          df -h /
+          echo "cpus: $(nproc)"; free -h; df -h /
           echo "::endgroup::"
 
-      - name: Build SUT from source (with memory monitor)
+      - name: Build SUT from source (--jobs 1, with memory monitor)
         run: |
           mkdir -p /tmp/mem
-          # Continuous host-memory sampler -> stdout (live log, survives runner-loss) AND a file.
           ( while true; do
               L="[mem $(date -u +%H:%M:%S)] $(free -m | awk '/Mem:/{printf "used=%sMB avail=%sMB ",$3,$7} /Swap:/{printf "swap_used=%sMB",$3}') load=$(cut -d' ' -f1-3 /proc/loadavg)"
-              echo "$L"
-              echo "$L" >> /tmp/mem/mem.log
+              echo "$L"; echo "$L" >> /tmp/mem/mem.log
               sleep 10
             done ) &
           MON=$!
@@ -62,13 +63,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: memory-trace
+          name: memory-trace-jobs1
           path: /tmp/mem/mem.log
           if-no-files-found: warn
-
-      - name: Diagnostics (best-effort)
-        if: always()
-        run: |
-          echo "::group::post diagnostics"; df -h /; free -h
-          docker images openobserve-testb:eval || true
-          echo "::endgroup::"
