@@ -1,0 +1,59 @@
+name: Build SUT from source (eval test)
+
+# Builds the OpenObserve SUT image from source using the eval's own compose +
+# deploy/build/Dockerfile, tags it openobserve-testb:eval (the eval compose handle),
+# then (if the build succeeds) starts it and health-checks /healthz.
+# No registry/AWS: the image is loaded locally only. Standard runner on purpose —
+# the point is to observe whether the from-source build fits a hosted runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch or SHA). Default: main."
+        required: false
+        default: "main"
+
+jobs:
+  build-sut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Runner specs (before build)
+        run: |
+          echo "::group::runner specs"
+          echo "cpus: $(nproc)"
+          free -h
+          df -h /
+          echo "::endgroup::"
+
+      - name: Build SUT image from source
+        run: |
+          docker compose -f deployment-testbot/docker-compose.yml build
+
+      - name: Start SUT and health-check
+        run: |
+          docker compose -f deployment-testbot/docker-compose.yml up -d
+          for i in $(seq 1 60); do
+            if curl -sf -m 3 http://localhost:5080/healthz >/dev/null; then
+              echo "SUT healthy"; exit 0
+            fi
+            sleep 3
+          done
+          echo "SUT did not become healthy within ~3 min"; exit 1
+
+      - name: Diagnostics (always)
+        if: always()
+        run: |
+          echo "::group::post-run diagnostics"
+          df -h /
+          free -h
+          docker images openobserve-testb:eval || true
+          docker compose -f deployment-testbot/docker-compose.yml ps -a || true
+          docker compose -f deployment-testbot/docker-compose.yml logs --tail 200 || true
+          echo "::endgroup::"
