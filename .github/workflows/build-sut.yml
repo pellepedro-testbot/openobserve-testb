@@ -1,0 +1,53 @@
+name: Build SUT from source (eval test)
+
+# Builds the OpenObserve SUT from source on the self-hosted rachzucco runner (94 GiB, 20 CPUs),
+# with a host-memory sampler. Targets the [self-hosted, rachzucco] label only — workflow_dispatch
+# (manual) so there is no fork-PR vector. The fork-PR-triggered testbot workflow stays GitHub-hosted.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (branch or SHA). Default: main."
+        required: false
+        default: "main"
+
+jobs:
+  build-sut:
+    runs-on: [self-hosted, rachzucco]
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Runner specs (before build)
+        run: |
+          echo "cpus: $(nproc)"; free -h
+
+      - name: Build SUT from source (memory monitor)
+        run: |
+          mkdir -p /tmp/mem
+          ( while true; do
+              echo "[mem $(date -u +%H:%M:%S)] $(free -m | awk '/Mem:/{printf "used=%sMB avail=%sMB ",$3,$7} /Swap:/{printf "swap=%sMB",$3}')"
+              sleep 15
+            done ) &
+          MON=$!
+          set +e
+          docker compose -f deployment-testbot/docker-compose.yml build
+          RC=$?
+          kill "$MON" 2>/dev/null
+          echo "=== docker build exit code: $RC ==="
+          exit "$RC"
+
+      - name: Verify image + start SUT
+        run: |
+          docker images | grep -i openobserve | head
+          docker compose -f deployment-testbot/docker-compose.yml up -d
+          sleep 20
+          docker compose -f deployment-testbot/docker-compose.yml ps
+
+      - name: Teardown (always)
+        if: always()
+        run: docker compose -f deployment-testbot/docker-compose.yml down -v || true
