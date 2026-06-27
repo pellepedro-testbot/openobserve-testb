@@ -1,14 +1,8 @@
 name: Build SUT from source (eval test)
 
-# Builds the OpenObserve SUT image from source using the eval's own compose +
-# deploy/build/Dockerfile, tags it openobserve-testb:eval (the eval compose handle),
-# then (if the build succeeds) starts it and health-checks /healthz.
-# No registry/AWS: the image is loaded locally only. Standard runner on purpose —
-# the point is to observe whether the from-source build fits a hosted runner.
-#
-# Follow-up run: 120-min budget. The build carries its OWN step timeout (115 min) so a
-# slow build fails the STEP (not the whole job), letting the if: always() diagnostics run
-# and capture df/free even on timeout — distinguishing "slow but fits" from "eventual OOM".
+# Builds the OpenObserve SUT from source (deploy/build/Dockerfile) on a standard runner,
+# while continuously sampling host memory to the live log (and a best-effort artifact) so a
+# memory-exhaustion failure is captured as OBSERVED data, not inferred. No registry/AWS.
 
 on:
   workflow_dispatch:
@@ -21,7 +15,7 @@ on:
 jobs:
   build-sut:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,29 +30,45 @@ jobs:
           df -h /
           echo "::endgroup::"
 
-      - name: Build SUT image from source
-        timeout-minutes: 115
+      - name: Build SUT from source (with memory monitor)
         run: |
+          mkdir -p /tmp/mem
+          # Continuous host-memory sampler -> stdout (live log, survives runner-loss) AND a file.
+          ( while true; do
+              L="[mem $(date -u +%H:%M:%S)] $(free -m | awk '/Mem:/{printf "used=%sMB avail=%sMB ",$3,$7} /Swap:/{printf "swap_used=%sMB",$3}') load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              echo "$L"
+              echo "$L" >> /tmp/mem/mem.log
+              sleep 10
+            done ) &
+          MON=$!
+          set +e
           docker compose -f deployment-testbot/docker-compose.yml build
+          RC=$?
+          kill "$MON" 2>/dev/null
+          echo "=== docker build exit code: $RC (137=SIGKILL/OOM, 143=SIGTERM) ==="
+          echo "=== memory trace tail ==="; tail -8 /tmp/mem/mem.log
+          exit "$RC"
 
       - name: Start SUT and health-check
         run: |
           docker compose -f deployment-testbot/docker-compose.yml up -d
           for i in $(seq 1 60); do
-            if curl -sf -m 3 http://localhost:5080/healthz >/dev/null; then
-              echo "SUT healthy"; exit 0
-            fi
+            if curl -sf -m 3 http://localhost:5080/healthz >/dev/null; then echo "SUT healthy"; exit 0; fi
             sleep 3
           done
           echo "SUT did not become healthy within ~3 min"; exit 1
 
-      - name: Diagnostics (always)
+      - name: Upload memory trace (best-effort)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-trace
+          path: /tmp/mem/mem.log
+          if-no-files-found: warn
+
+      - name: Diagnostics (best-effort)
         if: always()
         run: |
-          echo "::group::post-run diagnostics"
-          df -h /
-          free -h
+          echo "::group::post diagnostics"; df -h /; free -h
           docker images openobserve-testb:eval || true
-          docker compose -f deployment-testbot/docker-compose.yml ps -a || true
-          docker compose -f deployment-testbot/docker-compose.yml logs --tail 200 || true
           echo "::endgroup::"
