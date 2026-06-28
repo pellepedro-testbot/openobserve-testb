@@ -1,0 +1,106 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "{\"fields\":[{\"name\":\"log_level\",\"type\":\"keyword\"}],\"settings\":{}}",
+    "ResponseBody": "{\"code\":200}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "POST",
+    "Path": "/api/default/streams/skyramp-settings-test-1",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-28T00:15:50.174Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"list\":[{\"name\":\"skyramp-settings-test-1\",\"stream_type\":\"logs\"}],\"total\":1}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-28T00:15:50.174Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"code\":200,\"message\":\"stream deleted\"}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "DELETE",
+    "Path": "/api/default/streams/skyramp-settings-test-1",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-28T00:15:50.174Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"total\":0}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-28T00:15:50.174Z",
+    "Scheme": "http"
+  }
+]
