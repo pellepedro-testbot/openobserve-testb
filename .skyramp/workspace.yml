@@ -17,6 +17,8 @@ metadata:
   schemaVersion: v1
   mcpVersion: 0.2.7
   executorVersion: v1.3.27
+  createdAt: "2026-06-24T00:00:00Z"
+  updatedAt: "2026-06-24T00:00:00Z"
 services:
   - serviceName: openobserve-testb-backend
     language: python
