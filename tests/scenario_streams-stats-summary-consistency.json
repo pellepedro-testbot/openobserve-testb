@@ -1,0 +1,54 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"list\": [{\"name\": \"default\", \"stream_type\": \"logs\"}]}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-28T00:47:56.153Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"total\": 1, \"by_type\": {\"logs\": 1, \"metrics\": 0, \"traces\": 0}}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams/_stats_summary",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-28T00:47:56.153Z",
+    "Scheme": "http"
+  }
+]
