@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   testbot:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, rachzucco]
     # Never let Dependabot trigger this job (defense-in-depth; Dependabot is also disabled org-wide).
     # Testbot eval PRs (opened by a human/owner) still trigger normally.
     if: >-
