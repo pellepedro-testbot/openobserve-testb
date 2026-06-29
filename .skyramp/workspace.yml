@@ -1,26 +1,17 @@
-# Skyramp Workspace Configuration for OpenObserve eval.
-# OpenObserve is a Rust/Axum backend + Vue 3 frontend, both served by a single
-# binary on :5080 (the web UI is embedded at /web).
-#
-# Test-language decision (baseline): black-box HTTP. The backend is Rust, but
-# testbot does not generate Rust tests, so API tests are generated as Python
-# pytest hitting the running API over HTTP. UI tests are Playwright/TS.
-#
-# Auth: OpenObserve uses HTTP Basic on /api endpoints. get-token.sh emits the
-# base64 of "<email>:<password>"; authType: basic + authScheme: Basic makes the
-# executor send `Authorization: Basic <token>`. Root creds come from the
-# ZO_ROOT_USER_* env in deployment-testbot/docker-compose.yml.
+# Skyramp Workspace Configuration for OpenObserve eval (local baseline).
+# SUT is pre-built and already running on :5080, so serverStartCommand is a no-op.
+# Backend tests are black-box Python (Rust has no testbot test-gen). Basic auth.
 workspace:
   repoName: pellepedro-testbot/openobserve-testb
   repoUrl: https://github.com/pellepedro-testbot/openobserve-testb
 metadata:
   schemaVersion: v1
-  mcpVersion: 0.2.8
-  executorVersion: v1.3.29
-  createdAt: "2026-06-24T00:00:00.000Z"
-  updatedAt: "2026-06-28T00:00:00.000Z"
+  mcpVersion: 0.0.64
+  executorVersion: v1.3.27
+  createdAt: "2026-01-01T00:00:00Z"
+  updatedAt: "2026-01-01T00:00:00Z"
 services:
-  - serviceName: openobserve-testb-backend
+  - serviceName: openobserve-backend
     language: python
     framework: pytest
     testDirectory: tests
@@ -31,10 +22,9 @@ services:
       authScheme: Basic
       baseUrl: http://localhost:5080
     runtimeDetails:
-      serverStartCommand: docker compose -f deployment-testbot/docker-compose.yml up -d --build
       runtime: docker
-      dockerNetwork: deployment-testbot_default
-  - serviceName: openobserve-testb-web
+      dockerNetwork: eval-24-openobserve_default
+  - serviceName: openobserve-web
     language: typescript
     framework: playwright
     testDirectory: web/tests
@@ -43,6 +33,5 @@ services:
       authType: none
       authHeader: ""
     runtimeDetails:
-      serverStartCommand: docker compose -f deployment-testbot/docker-compose.yml up -d --build
       runtime: docker
-      dockerNetwork: deployment-testbot_default
+      dockerNetwork: eval-24-openobserve_default
