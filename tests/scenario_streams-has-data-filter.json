@@ -1,0 +1,88 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"list\":[{\"name\":\"default\",\"storage_type\":\"s3\",\"stream_type\":\"logs\",\"stats\":{\"created_at\":0,\"doc_time_min\":0,\"doc_time_max\":0,\"doc_num\":10,\"file_num\":1,\"storage_size\":100.0,\"compressed_size\":50.0,\"index_size\":0.0},\"schema\":[],\"settings\":{},\"total_fields\":0}],\"total\":1}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-29T20:33:07.942Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"list\":[{\"name\":\"default\",\"storage_type\":\"s3\",\"stream_type\":\"logs\",\"stats\":{\"created_at\":0,\"doc_time_min\":0,\"doc_time_max\":0,\"doc_num\":10,\"file_num\":1,\"storage_size\":100.0,\"compressed_size\":50.0,\"index_size\":0.0},\"schema\":[],\"settings\":{},\"total_fields\":0}],\"total\":1}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {
+      "has_data": [
+        "true"
+      ]
+    },
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-29T20:33:07.942Z",
+    "Scheme": "http"
+  },
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"list\":[{\"name\":\"default\",\"storage_type\":\"s3\",\"stream_type\":\"logs\",\"stats\":{\"created_at\":0,\"doc_time_min\":0,\"doc_time_max\":0,\"doc_num\":10,\"file_num\":1,\"storage_size\":100.0,\"compressed_size\":50.0,\"index_size\":0.0},\"schema\":[],\"settings\":{},\"total_fields\":0}],\"total\":1}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {
+      "has_data": [
+        "false"
+      ]
+    },
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-29T20:33:07.942Z",
+    "Scheme": "http"
+  }
+]

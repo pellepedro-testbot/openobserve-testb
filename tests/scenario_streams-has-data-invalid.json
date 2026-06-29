@@ -1,0 +1,32 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"code\":400,\"message\":\"'has_data' query param must be 'true' or 'false'\"}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {
+      "has_data": [
+        "invalid"
+      ]
+    },
+    "StatusCode": 400,
+    "Port": 5080,
+    "Timestamp": "2026-06-29T20:33:10.644Z",
+    "Scheme": "http"
+  }
+]
