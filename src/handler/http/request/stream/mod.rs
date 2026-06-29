@@ -525,6 +525,17 @@ pub async fn list(
         indices.retain(|s| s.name.to_lowercase().contains(&keyword));
     }
 
+    // filter by has_data — optional bool; when true only streams with doc_num > 0 are returned
+    match query.get("has_data").map(|v| v.to_lowercase()).as_deref() {
+        Some("true") => indices.retain(|s| s.stats.doc_num > 0),
+        Some("false") | None => {}
+        Some(_) => {
+            return MetaHttpResponse::bad_request(
+                "'has_data' query param must be 'true' or 'false'",
+            );
+        }
+    }
+
     // set total streams
     let total = indices.len();
 
