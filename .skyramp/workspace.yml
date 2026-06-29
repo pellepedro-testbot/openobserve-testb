@@ -20,10 +20,10 @@ services:
       authType: basic
       authHeader: Authorization
       authScheme: Basic
-      baseUrl: http://localhost:5080
+      baseUrl: http://openobserve:5080
     runtimeDetails:
       runtime: docker
-      dockerNetwork: eval-24-openobserve_default
+      dockerNetwork: deployment-testbot_default
   - serviceName: openobserve-web
     language: typescript
     framework: playwright
@@ -34,4 +34,4 @@ services:
       authHeader: ""
     runtimeDetails:
       runtime: docker
-      dockerNetwork: eval-24-openobserve_default
+      dockerNetwork: deployment-testbot_default
