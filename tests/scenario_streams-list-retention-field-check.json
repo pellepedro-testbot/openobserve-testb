@@ -1,0 +1,28 @@
+[
+  {
+    "Source": "192.168.65.1:39998",
+    "Destination": "localhost",
+    "RequestBody": "",
+    "ResponseBody": "{\"list\": [{\"name\": \"default\", \"stream_type\": \"logs\", \"settings\": {\"max_query_range\": 0, \"store_original_data\": false, \"bloom_filter_fields\": [], \"data_retention\": 0}, \"schema\": [], \"stats\": {\"file_num\": 0, \"doc_num\": 0, \"storage_size\": 0, \"compressed_size\": 0, \"index_size\": 0}, \"retention_period_days\": null}]}",
+    "RequestHeaders": {
+      "Content-Type": [
+        "application/json"
+      ],
+      "Authorization": [
+        "Basic SKYRAMP_PLACEHOLDER_TOKEN"
+      ]
+    },
+    "ResponseHeaders": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Method": "GET",
+    "Path": "/api/default/streams",
+    "QueryParams": {},
+    "StatusCode": 200,
+    "Port": 5080,
+    "Timestamp": "2026-06-29T19:41:19.707Z",
+    "Scheme": "http"
+  }
+]
