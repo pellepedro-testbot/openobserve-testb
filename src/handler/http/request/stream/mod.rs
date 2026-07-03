@@ -13,6 +13,17 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+// Stream handler module.
+//
+// OpenObserve supports three stream types:
+//   - logs    : structured and unstructured log records (default)
+//   - metrics : Prometheus-compatible time-series metrics
+//   - traces  : OpenTelemetry-compatible distributed traces
+//
+// All API routes in this module require HTTP Basic authentication.
+// The authenticated identity is extracted via the `UserEmail` extractor
+// and passed to downstream service functions for authorisation checks.
+
 use std::cmp::Ordering;
 
 use axum::{
