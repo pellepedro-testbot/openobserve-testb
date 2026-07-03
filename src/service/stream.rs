@@ -222,6 +222,12 @@ pub fn stream_res(
     };
     let is_derived = unwrap_stream_is_derived(&schema);
 
+    let retention_period_days = if settings.data_retention > 0 {
+        Some(settings.data_retention)
+    } else {
+        None
+    };
+
     Stream {
         name: stream_name.to_string(),
         storage_type: storage_type.to_string(),
@@ -234,6 +240,7 @@ pub fn stream_res(
         metrics_meta,
         pattern_associations,
         is_derived,
+        retention_period_days,
     }
 }
 

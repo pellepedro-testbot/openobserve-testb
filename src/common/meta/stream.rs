@@ -46,6 +46,11 @@ pub struct Stream {
     pub pattern_associations: Vec<PatternAssociation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_derived: Option<bool>,
+    /// Per-stream data retention ceiling in days.
+    /// `None` means the org-level default applies; `Some(n)` means this stream
+    /// deletes data older than n days.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_period_days: Option<i64>,
 }
 
 #[cfg(feature = "enterprise")]
