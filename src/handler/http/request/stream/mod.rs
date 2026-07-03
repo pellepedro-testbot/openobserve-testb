@@ -47,6 +47,16 @@ use crate::{
     service::stream,
 };
 
+/// Normalise a stream name according to the global formatting config.
+/// Returns the name unchanged when `skip_formatting_stream_name` is set.
+fn normalize_stream_name(name: String) -> String {
+    if config::get_config().common.skip_formatting_stream_name {
+        name
+    } else {
+        format_stream_name(name)
+    }
+}
+
 /// GetSchema
 #[utoipa::path(
     get,
@@ -80,10 +90,7 @@ pub async fn schema(
     Path((org_id, stream_name)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    let mut stream_name = stream_name;
-    if !config::get_config().common.skip_formatting_stream_name {
-        stream_name = format_stream_name(stream_name);
-    }
+    let stream_name = normalize_stream_name(stream_name);
     let stream_type = get_stream_type_from_request(&query).unwrap_or_default();
     let schema = stream::get_stream(&org_id, &stream_name, stream_type).await;
     let Some(mut schema) = schema else {
@@ -173,10 +180,7 @@ pub async fn create(
     Query(query): Query<HashMap<String, String>>,
     Json(stream): Json<StreamCreate>,
 ) -> Response {
-    let mut stream_name = stream_name;
-    if !config::get_config().common.skip_formatting_stream_name {
-        stream_name = format_stream_name(stream_name);
-    }
+    let stream_name = normalize_stream_name(stream_name);
     let stream_type = get_stream_type_from_request(&query).unwrap_or_default();
     if stream_type == StreamType::EnrichmentTables || stream_type == StreamType::Index {
         return (
@@ -229,11 +233,7 @@ pub async fn update_settings(
     Query(query): Query<HashMap<String, String>>,
     Json(stream_settings): Json<UpdateStreamSettings>,
 ) -> Response {
-    let cfg = config::get_config();
-    let mut stream_name = stream_name;
-    if !cfg.common.skip_formatting_stream_name {
-        stream_name = format_stream_name(stream_name);
-    }
+    let stream_name = normalize_stream_name(stream_name);
     let stream_type = get_stream_type_from_request(&query).unwrap_or_default();
     if stream_type == StreamType::EnrichmentTables || stream_type == StreamType::Index {
         return (
@@ -287,10 +287,7 @@ pub async fn update_fields(
     Query(query): Query<HashMap<String, String>>,
     Json(payload): Json<StreamUpdateFields>,
 ) -> Response {
-    let mut stream_name = stream_name;
-    if !config::get_config().common.skip_formatting_stream_name {
-        stream_name = format_stream_name(stream_name);
-    }
+    let stream_name = normalize_stream_name(stream_name);
     let stream_type = get_stream_type_from_request(&query);
     if payload.fields.is_empty() {
         return (
@@ -356,10 +353,7 @@ pub async fn delete_fields(
     Query(query): Query<HashMap<String, String>>,
     Json(fields): Json<StreamDeleteFields>,
 ) -> Response {
-    let mut stream_name = stream_name;
-    if !config::get_config().common.skip_formatting_stream_name {
-        stream_name = format_stream_name(stream_name);
-    }
+    let stream_name = normalize_stream_name(stream_name);
     let stream_type = get_stream_type_from_request(&query);
     match stream::delete_fields(&org_id, &stream_name, stream_type, &fields.fields).await {
         Ok(_) => (
@@ -652,10 +646,7 @@ pub async fn delete_stream_cache(
         )
             .into_response();
     }
-    let mut stream_name = stream_name;
-    if !config::get_config().common.skip_formatting_stream_name {
-        stream_name = format_stream_name(stream_name);
-    }
+    let stream_name = normalize_stream_name(stream_name);
     let stream_type = get_stream_type_from_request(&query).unwrap_or_default();
     let delete_ts = get_ts_from_request_with_key(&query, "ts").unwrap_or(0);
 
@@ -717,11 +708,7 @@ pub async fn delete_stream_data_by_time_range(
     Path((org_id, stream_name)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    let cfg = config::get_config();
-    let mut stream_name = stream_name;
-    if !cfg.common.skip_formatting_stream_name {
-        stream_name = format_stream_name(stream_name);
-    }
+    let stream_name = normalize_stream_name(stream_name);
     let stream_type = get_stream_type_from_request(&query).unwrap_or_default();
     let start = match get_ts_from_request_with_key(&query, "start") {
         Ok(ts) => ts,
