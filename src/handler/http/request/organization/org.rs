@@ -1099,37 +1099,6 @@ pub async fn accept_org_invite(
 ///
 /// NOTE: This endpoint is only accessible through the "_meta" organization and requires
 /// the user to have access to this special organization.
-#[utoipa::path(
-    get,
-    path = "/{org_id}/node/list",
-    context_path = "/api",
-    tag = "Organizations",
-    operation_id = "GetMetaOrganizationNodeList",
-    summary = "Get cluster node list",
-    description = "Retrieves a hierarchical list of all nodes in the OpenObserve cluster organized by regions and clusters, with detailed information about each node including versions and roles. Useful for monitoring cluster health and managing distributed deployments.",
-    security(
-        ("Authorization"= [])
-    ),
-    params(
-        ("org_id" = String, Path, description = "Must be '_meta'"),
-        ("regions" = String, Query, description = "Optional comma-separated list of regions to filter by (e.g., 'us-east-1,us-west-2')")
-    ),
-    responses(
-        (status = 200, description = "Success", content_type = "application/json", body = inline(NodeListResponse)),
-        (status = 403, description = "Forbidden - Not the _meta organization", content_type = "application/json", body = ()),
-        (status = 404, description = "NotFound", content_type = "application/json", body = ()),
-    ),
-    extensions(
-        ("x-o2-mcp" = json!({"enabled": false}))
-    )
-)]
-pub async fn node_list(
-    Path(org_id): Path<String>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
-) -> Response {
-    node_list_impl(&org_id, query).await
-}
-
 pub async fn node_list_impl(
     org_id: &str,
     query: std::collections::HashMap<String, String>,
