@@ -626,6 +626,7 @@ pub fn service_routes() -> Router {
 
         // Streams
         .route("/{org_id}/streams", get(stream::list))
+        .route("/{org_id}/streams/_stats_summary", get(stream::stats_summary))
         .route("/{org_id}/streams/{stream_name}", post(stream::create).delete(stream::delete))
         .route("/{org_id}/streams/{stream_name}/schema", get(stream::schema))
         .route("/{org_id}/streams/{stream_name}/settings", put(stream::update_settings))
